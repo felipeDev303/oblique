@@ -29,6 +29,13 @@ tests/
 
 <!-- Updated daily. Everything in this repository was written during the event. -->
 
+### Oct 28 (Day 3)
+
+- Repository scaffold following the planned architecture: `src/oblique/` packages (deck, prompts, llm, cache, generate, judges, metrics, evolve, proxy, export), `configs/`, `deck/cards/`, `data/`, `runs/`, `web/`, `notebooks/`, `tests/`.
+- Project tooling: `pyproject.toml` with uv (Python 3.11, locked dependencies), ruff and pytest configuration.
+- `.gitignore` that keeps secrets, benchmark data and raw run outputs out of the repo (only run summaries are committed); `.env.example` for Meta Model API and Baseten keys.
+- MIT license for the code.
+
 ## License
 
 Code: [MIT](LICENSE). The card deck will be released under CC BY 4.0 in `deck/LICENSE`.
