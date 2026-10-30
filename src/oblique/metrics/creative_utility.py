@@ -63,9 +63,24 @@ def greedy_order(q: Sequence[float], D: Sequence[Sequence[float]]) -> tuple[list
 
 
 def creative_utility(
-    q: Sequence[float], D: Sequence[Sequence[float]], gamma: float = GAMMA
+    q: Sequence[float],
+    D: Sequence[Sequence[float]],
+    gamma: float = GAMMA,
+    *,
+    strict: bool = False,
+    conforming: Sequence[bool] | None = None,
 ) -> float:
-    """CU in [0, 1] for one set. q: quality per idea; D: KxK distance matrix."""
+    """CU in [0, 1] for one set. q: quality per idea; D: KxK distance matrix.
+
+    Invalid ideas must already have q = 0 (ADR-006 §1). With `strict=True`
+    (the pre-registered sensitivity rule), ideas whose labels are off-list or
+    missing on either axis also count as q = 0; `conforming[i]` says whether
+    idea i has both labels ok/other.
+    """
+    if strict:
+        if conforming is None or len(conforming) != len(q):
+            raise ValueError("strict=True needs one `conforming` flag per idea")
+        q = [qi if ok else 0.0 for qi, ok in zip(q, conforming, strict=True)]
     _, marginals = greedy_order(q, D)
     weights = [gamma**i for i in range(len(marginals))]
     return sum(w * m for w, m in zip(weights, marginals, strict=True)) / sum(weights)

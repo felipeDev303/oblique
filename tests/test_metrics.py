@@ -87,6 +87,44 @@ def test_rejects_bad_input():
         creative_utility([1, 1], [[0, NAN], [NAN, 0]])
 
 
+# --- Default vs strict rule (ADR-006) ---------------------------------------
+
+Q3 = [1.0, 0.5, 1.0]
+D3 = _sym(3, {(0, 1): 0.4, (0, 2): 0.8, (1, 2): 0.6})
+
+
+def test_default_rule_ignores_label_conformity():
+    # idea 2 has an off-list label: judged as usual under the default rule
+    conforming = [True, True, False]
+    assert creative_utility(Q3, D3, conforming=conforming) == pytest.approx(1.882 / 2.71)
+    assert creative_utility(Q3, D3) == pytest.approx(1.882 / 2.71)
+
+
+def test_strict_rule_zeroes_non_conforming_ideas():
+    # strict: q = (1, 0.5, 0) -> greedy: idea 0 (1), idea 1 (0.5 * 0.4 = 0.2), idea 2 (0)
+    conforming = [True, True, False]
+    expected = (1 + 0.9 * 0.2) / 2.71
+    assert creative_utility(Q3, D3, strict=True, conforming=conforming) == pytest.approx(expected)
+    # same as zeroing q by hand
+    assert creative_utility([1.0, 0.5, 0.0], D3) == pytest.approx(expected)
+
+
+def test_rules_agree_when_everything_conforms():
+    all_ok = [True, True, True]
+    assert creative_utility(Q3, D3, strict=True, conforming=all_ok) == creative_utility(Q3, D3)
+
+
+def test_strict_rule_can_zero_the_whole_set():
+    assert creative_utility(Q3, D3, strict=True, conforming=[False] * 3) == 0.0
+
+
+def test_strict_rule_needs_one_flag_per_idea():
+    with pytest.raises(ValueError):
+        creative_utility(Q3, D3, strict=True)
+    with pytest.raises(ValueError):
+        creative_utility(Q3, D3, strict=True, conforming=[True, True])
+
+
 # --- Bootstrap --------------------------------------------------------------
 
 
