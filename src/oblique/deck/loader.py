@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -20,6 +21,32 @@ def load_card(path: str | Path) -> Card:
     if path.stem != card.id:
         raise ValueError(f"{path.name}: file name does not match id {card.id}")
     return card
+
+
+def dump_card(card: Card) -> str:
+    """YAML for one card, fields in schema order. Strings are JSON-quoted, which is valid
+    YAML, so the text is stored exactly as written."""
+
+    def ids(values: list[str]) -> str:
+        return "[" + ", ".join(values) + "]"
+
+    return (
+        f"id: {card.id}\n"
+        f"text: {json.dumps(card.text, ensure_ascii=False)}\n"
+        f"family: {card.family.value if card.family else 'null'}\n"
+        f"origin: {card.origin}\n"
+        f"generation: {card.generation}\n"
+        f"parents: {ids(card.parents)}\n"
+        f"opposite_of: {ids(card.opposite_of)}\n"
+        f"author: {json.dumps(card.author, ensure_ascii=False)}\n"
+        f"created: {card.created.isoformat()}\n"
+    )
+
+
+def write_card(card: Card, directory: str | Path) -> Path:
+    path = Path(directory) / f"{card.id}.yaml"
+    path.write_text(dump_card(card), encoding="utf-8", newline="\n")
+    return path
 
 
 def load_deck(directory: str | Path) -> dict[str, Card]:

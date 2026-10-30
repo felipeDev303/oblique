@@ -1,0 +1,9 @@
+id: OB-017
+text: "Only use data that already exists."
+family: constraint
+origin: seed
+generation: 0
+parents: []
+opposite_of: [OB-018]
+author: "felipe"
+created: 2026-10-30

@@ -1,0 +1,9 @@
+id: OB-020
+text: "No new model may be trained."
+family: constraint
+origin: seed
+generation: 0
+parents: []
+opposite_of: []
+author: "felipe"
+created: 2026-10-30

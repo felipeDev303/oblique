@@ -1,0 +1,9 @@
+id: OB-021
+text: "State the bet without naming any technique."
+family: ambiguity_specificity
+origin: seed
+generation: 0
+parents: []
+opposite_of: [OB-022]
+author: "felipe"
+created: 2026-10-30

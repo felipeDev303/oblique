@@ -1,0 +1,9 @@
+id: OB-010
+text: "Ask what this means for the whole field at once."
+family: scale
+origin: seed
+generation: 0
+parents: []
+opposite_of: [OB-009]
+author: "felipe"
+created: 2026-10-30

@@ -1,0 +1,9 @@
+id: OB-009
+text: "Shrink the question to a single observation."
+family: scale
+origin: seed
+generation: 0
+parents: []
+opposite_of: [OB-010]
+author: "felipe"
+created: 2026-10-30

@@ -62,7 +62,8 @@ tests/
 - Versioned prompts written for this project from a specification (no text taken from the paper): `ideation-v2` (always "Propose {k} distinct research ideas", four fields, taxonomy labels at the start of `problem_gap` and `method`, each label defined in one line written for this project, JSON-only `{"ideas": [...]}`), `quality-v1` (pairwise against the gold idea, both orders, idea shown as Problem / Claim / Approach without labels or inspiration), `distance-v1` (1–5 similarity per field) and `grounding-v1` (1–5 dependence of the claim on its sources). Each prompt's hash is pinned in the tests, so an edited template needs a new version. They follow the structure of Wadhwa et al. (2026) and the taxonomy of Chen et al. (2026).
 - The response cache key now includes the provider, so the same model and request served by different endpoints never share an entry.
 - Smoke test and cost gate (`python -m oblique.smoke`, run R-20261030-01): checks every configured model against `/v1/models` before any paid call, stops new calls past a spending cap, and measures seed behaviour, provider prompt caching, JSON mode, Contributor vs Standard, the minimum reasoning effort and reasoning tokens per call. First real calls to Muse Spark and Muse Wonder: 11 calls, about US$0.10 at Standard reference prices.
+- Seed deck v0 in `deck/cards/` (CC BY 4.0): the author's 30 seed cards (8 families, 4 opposite pairs) and 6 paper-opening cards, transcribed word for word, plus 30 random-noun control cards drawn reproducibly from a public noun list (method in `deck/README.md`). A YAML card writer that keeps the text exact.
 
 ## License
 
-Code: [MIT](LICENSE). The card deck will be released under CC BY 4.0 in `deck/LICENSE`.
+Code: [MIT](LICENSE). The card deck (`deck/cards/`) is released under [CC BY 4.0](deck/LICENSE).

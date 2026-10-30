@@ -1,0 +1,9 @@
+id: OB-022
+text: "Name the one number the whole idea depends on."
+family: ambiguity_specificity
+origin: seed
+generation: 0
+parents: []
+opposite_of: [OB-021]
+author: "felipe"
+created: 2026-10-30

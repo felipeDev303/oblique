@@ -1,0 +1,9 @@
+id: OB-018
+text: "Assume measuring anything is free."
+family: constraint
+origin: seed
+generation: 0
+parents: []
+opposite_of: [OB-017]
+author: "felipe"
+created: 2026-10-30

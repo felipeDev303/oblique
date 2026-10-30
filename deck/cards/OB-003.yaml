@@ -1,0 +1,9 @@
+id: OB-003
+text: "Keep only the claim that would survive if the rest were false."
+family: subtraction
+origin: seed
+generation: 0
+parents: []
+opposite_of: []
+author: "felipe"
+created: 2026-10-30

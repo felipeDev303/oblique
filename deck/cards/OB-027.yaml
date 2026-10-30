@@ -1,0 +1,9 @@
+id: OB-027
+text: "Find where two documents fail for the same reason."
+family: error
+origin: seed
+generation: 0
+parents: []
+opposite_of: []
+author: "felipe"
+created: 2026-10-30
