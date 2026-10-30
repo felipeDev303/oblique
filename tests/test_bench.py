@@ -8,11 +8,13 @@ import pytest
 
 from oblique import bench
 from oblique.bench import (
+    Instance,
     SealedSplitError,
     build_splits,
     extract_insight,
     instance_id,
     load_instances,
+    pick_baseline,
     recency_key,
     row_index,
     split_ids,
@@ -145,6 +147,34 @@ def test_wrong_data_file_is_detected(tiny_bench, tmp_path):
     pq.write_table(pa.Table.from_pylist(rows), other)
     with pytest.raises(ValueError, match="pair_id"):
         load_instances("A", path=other, directory=splits_dir)
+
+
+def _instances(rows):
+    return [
+        Instance(
+            id=instance_id(i),
+            pair_id=r["pair_id"],
+            arxiv_id=r["arxiv_id"],
+            domain=r["domain"],
+            paper1_title="t1",
+            paper2_title="t2",
+            abstract_1="a1",
+            abstract_2="a2",
+            gold="g",
+        )
+        for i, r in enumerate(rows)
+    ]
+
+
+def test_pick_baseline_covers_every_domain_and_is_reproducible():
+    rows = _rows()
+    a = [x for x in _instances(rows) if x.id in {i for i, _ in build_splits(rows)["A"]}]
+    picked = pick_baseline(a)
+    assert len(picked) == len(set(picked)) == 20
+    assert len({x.domain for x in a if x.id in picked}) == 16
+    assert picked == pick_baseline(list(reversed(a)))
+    with pytest.raises(ValueError):
+        pick_baseline(a, n=10)
 
 
 def test_committed_split_files():
