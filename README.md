@@ -59,6 +59,7 @@ tests/
 - Idea validity and taxonomy labels (ADR-006): `parse_set()` separates structural validity (decides q = 0) from label conformity. Labels are normalized and classified as ok / other / off_list / missing per axis.
 - `generations.jsonl` records with per-axis label status, and a strict-rule option for Creative Utility used as a pre-registered sensitivity analysis.
 - Benchmark loader for GiantsBench-test (CC BY 4.0), pinned by revision and SHA256, with gold insight extraction. Reproducible A/B splits of 50 instances (most recent per domain, stratified, drawn from the `splits` seed); split B is sealed behind an explicit environment flag.
+- Versioned prompts written for this project from a specification (no text taken from the paper): `ideation-v1` (four fields, taxonomy labels at the start of `problem_gap` and `method`, JSON-only `{"ideas": [...]}`), `quality-v1` (pairwise against the gold idea, both orders, idea shown as Problem / Claim / Approach without labels or inspiration), `distance-v1` (1–5 similarity per field) and `grounding-v1` (1–5 dependence of the claim on its sources). Each prompt's hash is pinned in the tests, so an edited template needs a new version. They follow the structure of Wadhwa et al. (2026) and the taxonomy of Chen et al. (2026).
 
 ## License
 

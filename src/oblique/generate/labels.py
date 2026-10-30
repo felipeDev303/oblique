@@ -36,6 +36,7 @@ METHOD_PARADIGMS = (
 
 OTHER = "Other"
 _LEADING_LABEL = re.compile(r"^\s*\[([^\]]+)\]")
+_LEADING_LABEL_SEP = re.compile(r"^\s*\[[^\]]+\]\s*[:\-–—]?\s*")
 _SLASH = re.compile(r"\s*/\s*")
 
 
@@ -91,6 +92,14 @@ def classify_label(field_text: str, labels: tuple[str, ...]) -> LabelResult:
         return LabelResult(LabelStatus.off_list, None, raw)
     status = LabelStatus.other if canonical == OTHER else LabelStatus.ok
     return LabelResult(status, canonical, raw)
+
+
+def strip_leading_label(field_text: str) -> str:
+    """Field text without its leading [label] (any label, on or off the list) and separator.
+
+    Only for the quality judge, whose gold idea has no labels (ADR-006 amendment 5).
+    """
+    return _LEADING_LABEL_SEP.sub("", field_text, count=1).strip()
 
 
 def classify_opportunity(problem_gap: str) -> LabelResult:
