@@ -237,6 +237,22 @@ def load_instances(
     return instances
 
 
+def pick_baseline(instances: Sequence[Instance], n: int = 20) -> list[str]:
+    """Baseline subset (author, 2026-10-30): one instance per domain, then n - #domains more
+    from the rest, all drawn with the `baseline` seed. Draw order: domains sorted by
+    name, one uniform pick each; then the extra picks, uniform without replacement."""
+    by_domain: dict[str, list[str]] = defaultdict(list)
+    for x in sorted(instances, key=lambda x: x.id):
+        by_domain[x.domain].append(x.id)
+    if n < len(by_domain):
+        raise ValueError(f"n = {n} is below the number of domains ({len(by_domain)})")
+    gen = rng("baseline")
+    chosen = [ids[gen.integers(len(ids))] for _, ids in sorted(by_domain.items())]
+    rest = sorted({x.id for x in instances} - set(chosen))
+    chosen += [rest[i] for i in gen.choice(len(rest), size=n - len(chosen), replace=False)]
+    return sorted(chosen)
+
+
 def main(argv: Sequence[str]) -> None:
     cmd = argv[0] if argv else ""
     if cmd == "fetch":

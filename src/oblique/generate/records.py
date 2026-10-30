@@ -30,7 +30,7 @@ class GenerationRecord(BaseModel):
     slot: int
     model: str
     prompt_hash: str
-    seed: int
+    seed: int | None  # None: no seed sent (the API ignores it, R-20261030-01)
     attempt: int = 0
     call_key: str
     tokens_in: int = 0
@@ -80,7 +80,7 @@ def records_from_set(
     condition: str,
     model: str,
     prompt_hash: str,
-    seed: int,
+    seed: int | None,
     call_key: str,
     usage: Usage,
     attempt: int = 0,

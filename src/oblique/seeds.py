@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 MASTER_SEED = 20261026
-PURPOSES = ("splits", "cards", "bootstrap")
+PURPOSES = ("splits", "cards", "bootstrap", "baseline")  # "baseline" appended 2026-10-30
 
 
 def seed_sequence(purpose: str, master: int = MASTER_SEED) -> np.random.SeedSequence:
