@@ -1,0 +1,33 @@
+# Cost gate before the baseline: provider cache, maximum temperature, Contributor concurrency.
+# python -m oblique.gate configs/R-20261030-02.yaml
+run_id: R-20261030-02
+split: A
+cache: .cache/responses.db
+
+prompts: [ideation-v2]
+
+# Baseline generator (author, 2026-10-30): Contributor, temperature 1.0, default reasoning, no seed.
+generator:
+  provider: meta
+  model: muse-spark-1.3-contributor
+  params: {temperature: 1.0, max_tokens: 12000, response_format: {type: json_object}}
+
+cache_test:
+  instance: i-0246           # 2nd ID in splits/A.txt; K = 3 then K = 1, back to back
+
+temperature:
+  instance: i-0258           # 3rd ID in splits/A.txt
+  max: 1.5                   # try 1.5, 1.4, ... (a 400 is not charged)
+  step: 0.1
+  tries: 6
+  samples: 2                 # calls at the highest accepted temperature, to check JSON parsing
+
+concurrency:
+  levels: [4, 8, 12, 16]
+  waves: 2                   # sequential waves of N simultaneous calls per level
+
+budget:
+  approved_usd: 0.25
+  stop_usd: 0.20             # no new call once the spend at these prices passes this
+  prices_per_m:
+    muse-spark-1.3-contributor: {in: 0.10, cached: 0.002, out: 0.20}   # Billing, 2026-10-30

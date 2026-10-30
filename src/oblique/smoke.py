@@ -77,23 +77,34 @@ def write_jsonl_dicts(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 class Smoke:
-    def __init__(self, cfg: dict[str, Any], *, out: Path | None = None, transport: Any = None):
+    def __init__(
+        self,
+        cfg: dict[str, Any],
+        *,
+        out: Path | None = None,
+        transport: Any = None,
+        wait: Any = None,
+    ):
         self.cfg = cfg
         self.run_id = cfg["run_id"]
         self.out = out or Path("runs") / self.run_id
         self.cache = Cache(cfg["cache"])
         self.transport = transport  # tests only: stands in for the OpenAI client
+        self.wait = wait  # tests only: retry wait strategy (default: the client's backoff)
         self.clients: dict[str, LLMClient] = {}
         self.calls: list[dict[str, Any]] = []
         self.judgments: list[dict[str, Any]] = []
         self.notes: dict[str, Any] = {}
         self.spent_usd = 0.0
 
+    def new_client(self, provider: str, concurrency: int = 1) -> LLMClient:
+        return LLMClient(
+            provider, self.cache, concurrency=concurrency, client=self.transport, wait=self.wait
+        )
+
     def client(self, provider: str) -> LLMClient:
         if provider not in self.clients:
-            self.clients[provider] = LLMClient(
-                provider, self.cache, concurrency=1, client=self.transport
-            )
+            self.clients[provider] = self.new_client(provider)
         return self.clients[provider]
 
     async def call(
@@ -103,13 +114,17 @@ class Smoke:
         messages: Messages,
         params: dict[str, Any] | None = None,
         sample_idx: int = 0,
+        *,
+        attempt: int = 0,
+        client: LLMClient | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> Completion:
         params = {**mode.get("params", {}), **(params or {})}
         if self.spent_usd > self.cfg["budget"]["stop_usd"]:
             raise BudgetExceeded(f"spent US${self.spent_usd:.3f}; stopping before {label!r}")
         t0 = time.perf_counter()
-        c = await self.client(mode["provider"]).complete(
-            mode["model"], messages, params=params, sample_idx=sample_idx
+        c = await (client or self.client(mode["provider"])).complete(
+            mode["model"], messages, params=params, sample_idx=sample_idx, attempt=attempt
         )
         cost = 0.0 if c.from_cache else self.cost(c)
         self.spent_usd += cost
@@ -121,6 +136,7 @@ class Smoke:
                 "provider": mode["provider"],
                 "params": params,
                 "sample_idx": sample_idx,
+                "attempt": attempt,
                 "from_cache": c.from_cache,
                 "seconds": round(time.perf_counter() - t0, 2),
                 "finish_reason": choice.get("finish_reason"),
@@ -131,6 +147,7 @@ class Smoke:
                 "usage_raw": c.response.get("usage"),
                 "cost_usd": round(cost, 5),
                 "call_key": c.key,
+                **(extra or {}),
             }
         )
         return c
@@ -154,6 +171,7 @@ class Smoke:
         key: str,
         values: list[Any],
         base: dict[str, Any] | None = None,
+        sample_idx: int = 0,
     ) -> tuple[Completion, dict[str, Any]]:
         """Try `params[key] = v` for each v in order (None: omit it); the first accepted wins.
 
@@ -164,7 +182,7 @@ class Smoke:
         for v in values:
             params = {**(base or {}), **({key: v} if v is not None else {})}
             try:
-                c = await self.call(label, mode, messages, params)
+                c = await self.call(label, mode, messages, params, sample_idx)
             except openai.BadRequestError as e:
                 rejected.append({"value": v, "error": str(e)[:300]})
                 continue
