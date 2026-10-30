@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 META_BASE_URL = "https://api.meta.ai/v1"
 SPARK_OPEN_BASETEN = "meta-models/muse-spark-open-1026"
+DEFAULT_TIMEOUT = 180.0  # seconds per attempt; generations take ~45 s (R-20261030-02)
 
 RETRYABLE = (
     openai.RateLimitError,
@@ -114,7 +115,44 @@ class Stats:
     deduplicated: int = 0
     retries: int = 0
     rate_limited: int = 0
+    limit_reductions: int = 0
     usage: Usage = field(default_factory=Usage)
+
+
+class ConcurrencyLimiter:
+    """Bounds calls in flight. If `adaptive`, a 429 halves the limit (floor 1); it never rises.
+
+    `epoch` counts reductions. Calls started before a reduction cannot reduce again, so
+    one burst of 429s from calls already in flight lowers the limit only once.
+    """
+
+    def __init__(self, limit: int, *, adaptive: bool = False):
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        self.limit = limit
+        self.adaptive = adaptive
+        self.epoch = 0
+        self.active = 0
+        self._cond = asyncio.Condition()
+
+    async def __aenter__(self) -> ConcurrencyLimiter:
+        async with self._cond:
+            await self._cond.wait_for(lambda: self.active < self.limit)
+            self.active += 1
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        async with self._cond:
+            self.active -= 1
+            self._cond.notify_all()
+
+    def on_rate_limited(self, epoch: int) -> bool:
+        """Report a 429 from a call started at `epoch`. True if the limit went down."""
+        if not self.adaptive or epoch != self.epoch or self.limit == 1:
+            return False
+        self.limit = max(1, self.limit // 2)
+        self.epoch += 1
+        return True
 
 
 def _message(response: dict[str, Any]) -> dict[str, Any]:
@@ -129,9 +167,10 @@ class LLMClient:
         cache: Cache,
         *,
         concurrency: int = 8,
+        adaptive: bool = False,
         max_attempts: int = 6,
         wait: wait_base | None = None,
-        timeout: float = 300.0,
+        timeout: float = DEFAULT_TIMEOUT,
         client: Any = None,
     ):
         self.provider = PROVIDERS[provider]
@@ -141,7 +180,7 @@ class LLMClient:
         self.timeout = timeout
         self.stats = Stats()
         self._client = client
-        self._semaphore = asyncio.Semaphore(concurrency)
+        self.limiter = ConcurrencyLimiter(concurrency, adaptive=adaptive)
         self._inflight: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     def _openai(self) -> Any:
@@ -190,7 +229,7 @@ class LLMClient:
         self, key: str, model: str, messages: list[dict[str, Any]], params: dict[str, Any]
     ) -> dict[str, Any]:
         request = {"model": model, "messages": messages, **params}
-        async with self._semaphore:
+        async with self.limiter:
             async for attempt in AsyncRetrying(
                 stop=stop_after_attempt(self.max_attempts),
                 wait=self.wait,
@@ -199,7 +238,18 @@ class LLMClient:
                 reraise=True,
             ):
                 with attempt:
-                    raw = await self._openai().chat.completions.create(**request)
+                    epoch = self.limiter.epoch
+                    try:
+                        raw = await self._openai().chat.completions.create(**request)
+                    except openai.RateLimitError:
+                        if self.limiter.on_rate_limited(epoch):
+                            self.stats.limit_reductions += 1
+                            logger.warning(
+                                "%s: 429, concurrency limit lowered to %d",
+                                self.provider.name,
+                                self.limiter.limit,
+                            )
+                        raise
         response = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw)
         usage = Usage.from_response(response)
         self.cache.put(
