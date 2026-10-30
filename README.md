@@ -36,6 +36,18 @@ tests/
 - `.gitignore` that keeps secrets, benchmark data and raw run outputs out of the repo (only run summaries are committed); `.env.example` for Meta Model API and Baseten keys.
 - MIT license for the code.
 
+### Oct 29 (Day 4)
+
+- `cache`: SQLite (WAL) response cache keyed by a hash of model, messages, parameters, sample index and attempt. Only successful responses are stored and entries are never overwritten.
+- `llm`: a single OpenAI-compatible client for Meta Model API and Baseten (Muse Spark Open). It retries with exponential backoff and jitter, bounds concurrency with a semaphore, deduplicates identical in-flight requests, records input/cached/output/reasoning tokens, and sends every call through the cache.
+- `metrics`: greedy Creative Utility (γ = 0.9), tested against a hand-computed set and the paper's figure 1, plus percentile paired bootstrap CIs over instances (10,000 resamples). All seeds derive from one master seed (20261026).
+- Schemas: `IdeaCard` (problem_gap, core_claim, method, inspiration) and deck `Card` with a closed family list, symmetric `opposite_of`, and a deck loader that validates every YAML file and the deck as a whole.
+
+### Oct 30 (Day 5)
+
+- Idea validity and taxonomy labels (ADR-006): `parse_set()` separates structural validity (decides q = 0) from label conformity. Labels are normalized and classified as ok / other / off_list / missing per axis.
+- `generations.jsonl` records with per-axis label status, and a strict-rule option for Creative Utility used as a pre-registered sensitivity analysis.
+
 ## License
 
 Code: [MIT](LICENSE). The card deck will be released under CC BY 4.0 in `deck/LICENSE`.
