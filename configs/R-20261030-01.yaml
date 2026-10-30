@@ -41,7 +41,7 @@ judges:
 
 budget:
   approved_usd: 0.60
-  stop_usd: 0.50             # no new call once the upper-bound spend passes this
+  stop_usd: 0.50             # no new call once the spend at these prices passes this
   # Reference prices (unofficial, vault note "Meta Model API"), USD per million tokens.
   # Contributor is priced as Standard: an upper bound until Billing shows the real price.
   prices_per_m:

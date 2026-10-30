@@ -11,6 +11,7 @@ import yaml
 
 from oblique import smoke
 from oblique.bench import Instance
+from oblique.llm import Completion, Usage
 
 INSTANCE = Instance(
     id="i-0032",
@@ -44,11 +45,12 @@ class FakeAPI:
 
     MODELS = ("muse-spark-1.3", "muse-spark-1.3-contributor", "muse-wonder-1.0")
 
-    def __init__(self, models=MODELS, completion_tokens=10):
+    def __init__(self, models=MODELS, completion_tokens=10, reasoning_tokens=0):
         self.chat = self.completions = self
         self.models = SimpleNamespace(list=self._models)
         self.available = models
-        self.completion_tokens = completion_tokens
+        self.completion_tokens = completion_tokens  # includes reasoning, as the real API does
+        self.reasoning_tokens = reasoning_tokens
         self.requests = []
 
     async def _models(self):
@@ -73,7 +75,11 @@ class FakeAPI:
         return _Raw(
             {
                 "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 100, "completion_tokens": self.completion_tokens},
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": self.completion_tokens,
+                    "completion_tokens_details": {"reasoning_tokens": self.reasoning_tokens},
+                },
             }
         )
 
@@ -103,14 +109,24 @@ def test_missing_model_stops_before_any_paid_call(tmp_path, monkeypatch):
     assert run.notes["models_missing"] == ["muse-spark-1.3-contributor"]
 
 
+def test_cost_does_not_add_reasoning_twice(tmp_path):
+    run = smoke.Smoke(_cfg(tmp_path), out=tmp_path / "run")
+    usage = Usage(tokens_in=1000, tokens_cached=800, tokens_out=500, tokens_reasoning=400)
+    c = Completion("k", "muse-spark-1.3", "{}", None, usage, False, {})
+    # 200 uncached x 1.25 + 800 cached x 0.15 + 500 output (reasoning included) x 4.25
+    assert run.cost(c) == pytest.approx((200 * 1.25 + 800 * 0.15 + 500 * 4.25) / 1e6)
+
+
 def test_budget_stops_new_calls(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, "load_instances", lambda split: [INSTANCE])
-    # 40k output tokens at 4.25/M = US$0.17 per call: the 4th call is refused.
-    api = FakeAPI(completion_tokens=40_000)
+    # 40k completion tokens (30k of them reasoning) at 4.25/M = US$0.17 per call:
+    # the 4th call is refused. Counting reasoning twice would refuse the 3rd.
+    api = FakeAPI(completion_tokens=40_000, reasoning_tokens=30_000)
     run = smoke.Smoke(_cfg(tmp_path), out=tmp_path / "run", transport=api)
     with pytest.raises(smoke.BudgetExceeded):
         asyncio.run(run.run())
-    assert len(run.calls) == 3 and run.spent_usd > 0.5
+    assert len(run.calls) == 3
+    assert run.spent_usd == pytest.approx(3 * (100 * 1.25 + 40_000 * 4.25) / 1e6)
 
 
 def test_smoke_runs_end_to_end(tmp_path, monkeypatch):
