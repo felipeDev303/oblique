@@ -106,12 +106,12 @@ class Smoke:
     ) -> Completion:
         params = {**mode.get("params", {}), **(params or {})}
         if self.spent_usd > self.cfg["budget"]["stop_usd"]:
-            raise BudgetExceeded(f"spent <= US${self.spent_usd:.3f}; stopping before {label!r}")
+            raise BudgetExceeded(f"spent US${self.spent_usd:.3f}; stopping before {label!r}")
         t0 = time.perf_counter()
         c = await self.client(mode["provider"]).complete(
             mode["model"], messages, params=params, sample_idx=sample_idx
         )
-        cost = 0.0 if c.from_cache else self.cost_upper(c)
+        cost = 0.0 if c.from_cache else self.cost(c)
         self.spent_usd += cost
         choice = (c.response.get("choices") or [{}])[0]
         self.calls.append(
@@ -129,20 +129,22 @@ class Smoke:
                 "tokens_out": c.usage.tokens_out,
                 "tokens_reasoning": c.usage.tokens_reasoning,
                 "usage_raw": c.response.get("usage"),
-                "cost_upper_usd": round(cost, 5),
+                "cost_usd": round(cost, 5),
                 "call_key": c.key,
             }
         )
         return c
 
-    def cost_upper(self, c: Completion) -> float:
-        """Upper bound from the reference prices: reasoning is added to output in case
-        `completion_tokens` excludes it, and Contributor is priced as Standard."""
+    def cost(self, c: Completion) -> float:
+        """Cost of one call at the configured prices (USD per million tokens).
+
+        Reasoning tokens are already inside `completion_tokens` (verified in
+        R-20261030-01), so they are not added again.
+        """
         p = self.cfg["budget"]["prices_per_m"][c.model]
         u = c.usage
         uncached = u.tokens_in - u.tokens_cached
-        tokens = (uncached * p["in"], u.tokens_cached * p["cached"])
-        return (sum(tokens) + (u.tokens_out + u.tokens_reasoning) * p["out"]) / 1e6
+        return (uncached * p["in"] + u.tokens_cached * p["cached"] + u.tokens_out * p["out"]) / 1e6
 
     async def first_accepted(
         self,
@@ -316,7 +318,7 @@ class Smoke:
         }
         summary = {
             "run_id": self.run_id,
-            "spent_upper_usd": round(self.spent_usd, 4),
+            "spent_usd": round(self.spent_usd, 4),
             "notes": self.notes,
             "client_stats": stats,
         }
