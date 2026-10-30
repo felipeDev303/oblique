@@ -72,7 +72,8 @@ class FakeAPI:
                     {"ideas": [idea(len(self.requests) * 10 + i) for i in range(k)]}
                 )
         elif "expert reviewer" in system:
-            if request["model"] == "muse-wonder-1.0":
+            # Wonder and the anchor comparison always prefer position A, so q = 0.5.
+            if request["model"] == "muse-wonder-1.0" or "Gold" not in user:
                 content = '{"winner": "A"}'
             else:
                 content = (
@@ -149,6 +150,28 @@ def test_baseline_end_to_end(cfg, tmp_path, monkeypatch):
     assert sorted({r["slot"] for r in c0}) == [0, 1, 2]
     assert sum(r["attempt"] == 1 for r in c0) == 1
     assert all(r["seed"] is None for r in c0)
+
+
+def test_anchor_is_the_primary_q_and_the_gold_is_secondary(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(baseline, "load_instances", lambda split: INSTANCES)
+    cfg["q_reference"] = "anchor"
+    api = FakeAPI()
+    run = baseline.Baseline(
+        cfg, out=tmp_path / "run", transport=api, wait=wait_none(), embedder=FakeEmbedder()
+    )
+    asyncio.run(run.run())
+    m = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))["metrics"]
+
+    gens = [r for r in api.requests if "research scientist" in r["messages"][0]["content"]]
+    assert len(gens) == 81 + 20  # one anchor per instance
+    assert len((tmp_path / "run" / "anchors.jsonl").read_text("utf-8").splitlines()) == 20
+    for cond in ("C0", "C1"):
+        assert m["table"][cond]["q"]["mean"] == 0.5
+        assert m["table"][cond]["q_gold"]["mean"] == 1.0
+        assert m["q_report"]["anchor"][cond]["tie_share"] == 1.0
+        # The anchor gives CU its q: with q = 0.5 throughout, CU sits below the gold's.
+        assert m["table"][cond]["cu"]["mean"] < 0.5
+    assert m["calibration"]["position_anchor"]["a_both"] == 1.0
 
 
 def test_config_instances_must_match_the_seeded_pick(cfg, tmp_path, monkeypatch):

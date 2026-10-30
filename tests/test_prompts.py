@@ -119,6 +119,20 @@ def test_quality_orders_swap_the_ideas():
     assert second == f"Idea A:\nGold insight.\n\nIdea B:\n{render_card(IDEA)}"
 
 
+def test_quality_against_an_anchor_shows_both_ideas_the_same_way():
+    anchor = IdeaCard(
+        problem_gap="[Other] Anchor gap.",
+        core_claim="Anchor claim.",
+        method="[Other] Anchor method.",
+        inspiration="Never shown.",
+    )
+    user = quality_messages(IDEA, render_card(anchor), idea_first=False)[1]["content"]
+    assert user == (
+        "Idea A:\nProblem: Anchor gap.\nClaim: Anchor claim.\nApproach: Anchor method.\n\n"
+        f"Idea B:\n{render_card(IDEA)}"
+    )
+
+
 def test_quality_prompt_shows_no_date():
     system = PROMPTS["quality-v1"].system.lower()
     assert "date" not in system and "year" not in system

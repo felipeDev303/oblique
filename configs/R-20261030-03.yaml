@@ -5,6 +5,7 @@ split: A
 cache: .cache/responses.db
 
 prompts: [ideation-v2, quality-v1, distance-v1, grounding-v1]
+q_reference: gold            # this run predates ADR-008
 
 # 1 per domain + 4 more, drawn with the `baseline` seed: oblique.bench.pick_baseline(A).
 # The run refuses to start if this list differs from the pick.

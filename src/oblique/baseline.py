@@ -7,8 +7,10 @@ C1: one call that asks for a set of K = 3. No card, no seed.
 
 Validity follows ADR-006: one retry (attempt 1) only on `json_error`; invalid
 ideas get q = 0 and are not judged. Judges (author, 2026-10-30):
-- quality, Spark, both orders against the gold (primary q);
-- quality, Wonder, both orders (agreement only);
+- quality, Spark, both orders against the anchor idea (primary q, ADR-008), with
+  `q_reference: anchor`; a run configured with `q_reference: gold` predates it;
+- quality, Spark, both orders against the gold (secondary q);
+- quality, Wonder, both orders against the gold (agreement only);
 - distance, Spark, every pair of valid ideas in a set (primary d);
 - grounding, Spark, every valid idea;
 - distance from local embeddings, the same pairs (secondary d).
@@ -61,6 +63,7 @@ from oblique.smoke import MissingModels, Smoke, load_env, write_jsonl_dicts
 
 K = 3
 CONDITIONS = ("C0", "C1")
+ANCHOR_SAMPLE_IDX = 500  # reserved (ADR-008): one anchor per instance, shared by all conditions
 SetKey = tuple[str, str]  # (instance, condition)
 
 
@@ -74,11 +77,18 @@ class Baseline(Smoke):
         self.embedder = embedder  # tests only: stands in for the sentence-transformers model
         self.slots: dict[SetKey, list[GenerationRecord]] = {}
         self.judge_rows: list[dict[str, Any]] = []
-        self.q: dict[str, dict[tuple[str, str, int], float | None]] = {"spark": {}, "wonder": {}}
+        # "spark" and "wonder": q against the gold; "anchor": Spark, q against the anchor (ADR-008).
+        self.q: dict[str, dict[tuple[str, str, int], float | None]] = {
+            "spark": {},
+            "wonder": {},
+            "anchor": {},
+        }
         self.verdicts: dict[str, dict[tuple[str, str, int], tuple[str, str]]] = {
             "spark": {},
             "wonder": {},
+            "anchor": {},
         }
+        self.anchors: dict[str, IdeaCard | None] = {}
         self.d_llm: dict[tuple[str, str, int, int], float | None] = {}
         self.d_emb: dict[tuple[str, str, int, int], float] = {}
         self.ground: dict[tuple[str, str, int], float | None] = {}
@@ -157,6 +167,16 @@ class Baseline(Smoke):
         )
         self.notes["generator_client"] = vars(client.stats) | {"usage": vars(client.stats.usage)}
 
+    async def generate_anchors(self, client, instances: list[Instance]) -> None:
+        """One K = 1 idea per instance at the reserved sample_idx (ADR-008). An instance whose
+        anchor is invalid has no primary q: its sets count as incomplete."""
+        results = await asyncio.gather(
+            *(self.generate_call(client, x, "ANCHOR", 1, ANCHOR_SAMPLE_IDX) for x in instances)
+        )
+        records = [r[0] for r in results]
+        self.anchors = {x.id: r.idea for x, r in zip(instances, records, strict=True)}
+        write_jsonl(self.out / "anchors.jsonl", records)
+
     # --- judges ---------------------------------------------------------------
 
     async def judge_call(self, client, judge: str, prompt, mode, messages, parse, ids: dict):
@@ -193,11 +213,19 @@ class Baseline(Smoke):
         return None
 
     async def quality(self, client, name: str, x: Instance, cond: str, slot: int, idea: IdeaCard):
-        mode = self.cfg["judges"][name]
+        mode = self.cfg["judges"]["spark" if name == "anchor" else name]
         ids = {"instance": x.id, "condition": cond, "slot": slot}
+        key = (x.id, cond, slot)
+        if name == "anchor":
+            if self.anchors[x.id] is None:
+                self.q[name][key] = None
+                return
+            reference = render_card(self.anchors[x.id])
+        else:
+            reference = x.gold
         winners = []
         for idea_first in (True, False):
-            msgs = quality_messages(idea, x.gold, idea_first=idea_first)
+            msgs = quality_messages(idea, reference, idea_first=idea_first)
             winners.append(
                 await self.judge_call(
                     client,
@@ -209,7 +237,6 @@ class Baseline(Smoke):
                     ids | {"idea_first": idea_first},
                 )  # fmt: skip
             )
-        key = (x.id, cond, slot)
         if None in winners:
             self.q[name][key] = None
         else:
@@ -230,10 +257,22 @@ class Baseline(Smoke):
                                   grounding_messages(x, idea), parse_grounding, ids)  # fmt: skip
         self.ground[(x.id, cond, slot)] = None if s is None else grounding(s)
 
+    def judge_client(self, name: str):
+        mode = self.cfg["judges"][name]
+        return self.new_client(
+            mode["provider"], mode["concurrency"], adaptive=mode.get("adaptive", False)
+        )
+
+    def client_stats(self, client) -> dict[str, Any]:
+        return (
+            vars(client.stats)
+            | {"usage": vars(client.stats.usage)}
+            | {"final_concurrency_limit": client.limiter.limit}
+        )
+
     async def judge(self, instances: list[Instance]) -> None:
-        judges = self.cfg["judges"]
-        spark = self.new_client(judges["spark"]["provider"], judges["spark"]["concurrency"])
-        wonder = self.new_client(judges["wonder"]["provider"], judges["wonder"]["concurrency"])
+        spark = self.judge_client("spark")
+        wonder = self.judge_client("wonder")
         jobs = []
         for x in instances:
             for cond in CONDITIONS:
@@ -242,13 +281,15 @@ class Baseline(Smoke):
                     jobs.append(self.quality(spark, "spark", x, cond, slot, idea))
                     jobs.append(self.quality(wonder, "wonder", x, cond, slot, idea))
                     jobs.append(self.grounding_one(spark, x, cond, slot, idea))
+                    if self.primary_q == "anchor":
+                        jobs.append(self.quality(spark, "anchor", x, cond, slot, idea))
                 for (i, a), (j, b) in itertools.combinations(valid, 2):
                     jobs.append(self.distance_pair(spark, x, cond, i, j, a, b))
         await asyncio.gather(*jobs)
         write_jsonl_dicts(self.out / "judgments.jsonl", self.judge_rows)
         self.notes["judge_clients"] = {
-            "spark": vars(spark.stats) | {"usage": vars(spark.stats.usage)},
-            "wonder": vars(wonder.stats) | {"usage": vars(wonder.stats.usage)},
+            "spark": self.client_stats(spark),
+            "wonder": self.client_stats(wonder),
         }
 
     def embed(self) -> None:
@@ -265,10 +306,82 @@ class Baseline(Smoke):
 
     # --- metrics --------------------------------------------------------------
 
+    @property
+    def primary_q(self) -> str:
+        """Which q drives CU: "anchor" (ADR-008) or "spark" (against the gold, runs before it)."""
+        return {"anchor": "anchor", "gold": "spark"}[self.cfg["q_reference"]]
+
+    def q_report(self, name: str) -> dict[str, Any]:
+        """q per condition (invalid ideas count as 0): CI over instances, ties, position."""
+        out: dict[str, Any] = {}
+        per_instance: dict[str, dict[str, float]] = {}
+        for cond in CONDITIONS:
+            means: dict[str, float] = {}
+            judged: list[float] = []
+            verdicts: list[tuple[str, str]] = []
+            for (iid, c), records in sorted(self.slots.items()):
+                if c != cond:
+                    continue
+                keys = [(iid, c, r.slot) for r in records]
+                qs = [
+                    self.q[name].get(k) if r.valid else 0.0
+                    for k, r in zip(keys, records, strict=True)
+                ]
+                judged += [self.q[name][k] for k, r in zip(keys, records, strict=True)
+                           if r.valid and self.q[name].get(k) is not None]  # fmt: skip
+                verdicts += [self.verdicts[name][k] for k in keys if k in self.verdicts[name]]
+                if all(v is not None for v in qs):
+                    means[iid] = sum(qs) / len(qs)
+            per_instance[cond] = means
+            out[cond] = {
+                "q": ci_dict(bootstrap_mean_ci(list(means.values()))) if means else None,
+                "ideas_judged": len(judged),
+                "tie_share": judged.count(0.5) / len(judged) if judged else None,
+                "win_share": judged.count(1.0) / len(judged) if judged else None,
+                "loss_share": judged.count(0.0) / len(judged) if judged else None,
+                "position": position_consistency(verdicts) if verdicts else None,
+                "by_instance": means,
+            }
+        common = set(per_instance["C0"]) & set(per_instance["C1"])
+        if common:
+            out["q C1-C0"] = ci_dict(
+                paired_delta_ci(
+                    {i: per_instance["C1"][i] for i in common},
+                    {i: per_instance["C0"][i] for i in common},
+                )
+            )
+        verdicts = list(self.verdicts[name].values())
+        out["position_all"] = position_consistency(verdicts) if verdicts else None
+        return out
+
+    def length_bias(self, name: str, instances: list[Instance]) -> dict[str, Any]:
+        """Length of the idea the quality judge sees vs its q, and vs the reference's length."""
+        ideas = {(k[0], k[1], r.slot): r.idea for k, recs in self.slots.items() for r in recs}
+        reference = {
+            x.id: len(render_card(self.anchors[x.id]) if name == "anchor" else x.gold)
+            for x in instances
+            if name != "anchor" or self.anchors.get(x.id) is not None
+        }
+        keys = [k for k, v in self.q[name].items() if v is not None]
+        lengths = [len(render_card(ideas[k])) for k in keys]
+        rel = [len(render_card(ideas[k])) - reference[k[0]] for k in keys]
+        qs = [self.q[name][k] for k in keys]
+        return {
+            "n": len(keys),
+            "pearson_len_q": pearson(lengths, qs),
+            "spearman_len_q": spearman(lengths, qs),
+            "pearson_len_minus_reference_q": pearson(rel, qs),
+            "mean_idea_chars": sum(lengths) / len(lengths) if lengths else None,
+            "mean_reference_chars": sum(reference.values()) / len(reference) if reference else None,
+        }
+
     def set_metrics(self, key: SetKey) -> dict[str, Any]:
         iid, cond = key
         records = self.slots[key]
-        q = [self.q["spark"].get((iid, cond, r.slot), 0.0) if r.valid else 0.0 for r in records]
+        q = [
+            self.q[self.primary_q].get((iid, cond, r.slot), 0.0) if r.valid else 0.0
+            for r in records
+        ]
         complete = all(v is not None for v in q)
         D = [[0.0 if i == j else math.nan for j in range(K)] for i in range(K)]
         De = [row[:] for row in D]
@@ -293,8 +406,10 @@ class Baseline(Smoke):
         q = [float(v) for v in q]
         conforming = [r.conforming for r in records]
         g = [self.ground.get((iid, cond, r.slot)) for r in records if r.valid]
+        q_gold = [self.q["spark"].get((iid, cond, r.slot)) if r.valid else 0.0 for r in records]
         out |= {
             "q": sum(q) / K,
+            "q_gold": sum(q_gold) / K if all(v is not None for v in q_gold) else None,
             "cu": creative_utility(q, D),
             "cu_strict": creative_utility(q, D, strict=True, conforming=conforming),
             "cu_embed": creative_utility(q, De),
@@ -318,7 +433,7 @@ class Baseline(Smoke):
                 if r["condition"] == cond:
                     cell["invalid_ideas"] += r["invalid"]
                     cell["ideas"] += K
-            for m in ("cu", "q", "d", "d_embed", "grounding", "cu_strict", "cu_embed"):
+            for m in ("cu", "q", "q_gold", "d", "d_embed", "grounding", "cu_strict", "cu_embed"):
                 vals = [by[cond][i][m] for i in sorted(ok_ids) if by[cond][i].get(m) is not None]
                 cell[m] = ci_dict(bootstrap_mean_ci(vals)) if vals else None
             wonder_q = [
@@ -327,7 +442,7 @@ class Baseline(Smoke):
             cell["q_wonder_ideas_mean"] = sum(wonder_q) / len(wonder_q) if wonder_q else None
             table[cond] = cell
         deltas = {}
-        for m in ("cu", "q", "d", "d_embed"):
+        for m in ("cu", "q", "q_gold", "d", "d_embed"):
             a = {i: by["C1"][i][m] for i in ok_ids if by["C1"][i].get(m) is not None}
             b = {i: by["C0"][i][m] for i in ok_ids if by["C0"][i].get(m) is not None}
             common = set(a) & set(b)
@@ -340,12 +455,11 @@ class Baseline(Smoke):
             "incomplete_sets": len(rows) - len(complete),
             "table": table,
             "deltas": deltas,
+            "q_report": {n: self.q_report(n) for n, values in self.q.items() if values},
             "calibration": self.calibration(instances),
         }
 
     def calibration(self, instances: list[Instance]) -> dict[str, Any]:
-        gold_len = {x.id: len(x.gold) for x in instances}
-        ideas = {(k[0], k[1], r.slot): r.idea for k, recs in self.slots.items() for r in recs}
         pairs = [(d, self.d_emb[k]) for k, d in self.d_llm.items() if d is not None]
         both = [
             k
@@ -371,21 +485,11 @@ class Baseline(Smoke):
             if orders
             else None,
         }
-        for name in ("spark", "wonder"):
-            verdicts = list(self.verdicts[name].values())
-            out[f"position_{name}"] = position_consistency(verdicts) if verdicts else None
-            keys = [k for k, v in self.q[name].items() if v is not None]
-            lengths = [len(render_card(ideas[k])) for k in keys]
-            rel = [len(render_card(ideas[k])) - gold_len[k[0]] for k in keys]
-            qs = [self.q[name][k] for k in keys]
-            out[f"length_bias_{name}"] = {
-                "n": len(keys),
-                "pearson_len_q": pearson(lengths, qs),
-                "spearman_len_q": spearman(lengths, qs),
-                "pearson_len_minus_gold_q": pearson(rel, qs),
-                "mean_idea_chars": sum(lengths) / len(lengths) if lengths else None,
-                "mean_gold_chars": sum(gold_len.values()) / len(gold_len),
-            }
+        for name, values in self.q.items():
+            if values:
+                verdicts = list(self.verdicts[name].values())
+                out[f"position_{name}"] = position_consistency(verdicts) if verdicts else None
+                out[f"length_bias_{name}"] = self.length_bias(name, instances)
         return out
 
     def examples(self, instances: list[Instance]) -> dict[str, list[dict[str, Any]]]:
@@ -421,6 +525,10 @@ class Baseline(Smoke):
             await self.check_models()
             instances = self.instances()
             await self.generate(instances)
+            if self.primary_q == "anchor":
+                gen = self.cfg["generator"]
+                client = self.new_client(gen["provider"], gen["concurrency"])
+                await self.generate_anchors(client, instances)
             print("generation done:", dict(self.progress), f"US${self.spent_usd:.3f}", flush=True)
             await self.judge(instances)
             print("judges done:", dict(self.progress), f"US${self.spent_usd:.3f}", flush=True)
