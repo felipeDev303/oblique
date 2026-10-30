@@ -158,6 +158,26 @@ def test_transient_errors_are_retried_and_not_cached(cache):
     assert len(cache) == 1
 
 
+def test_transport_retries_keep_the_same_cache_key(cache):
+    # ADR-006 amendment 3: 429/5xx/timeout retries are not an `attempt`.
+    from oblique.cache import make_key
+
+    transport = FakeTransport(
+        [
+            _status_error(openai.RateLimitError, 429),
+            openai.APITimeoutError(request=httpx.Request("POST", "https://example.invalid")),
+            _response("ok"),
+        ]
+    )
+    llm = _client(cache, transport)
+    result = asyncio.run(llm.complete("m", MSGS, params={"temperature": 1.0}, sample_idx=2))
+    expected = make_key("m", MSGS, {"temperature": 1.0}, sample_idx=2, attempt=0)
+    assert result.key == expected
+    assert len(transport.calls) == 3
+    assert all(call == transport.calls[0] for call in transport.calls)  # identical requests
+    assert len(cache) == 1 and expected in cache
+
+
 def test_gives_up_after_max_attempts_and_caches_nothing(cache):
     transport = FakeTransport([_status_error(openai.RateLimitError, 429)] * 3)
     llm = _client(cache, transport, max_attempts=3)

@@ -79,6 +79,14 @@ def test_invalid_ideas_have_no_label_status():
     assert not any(r.conforming for r in records)
 
 
+def test_fenced_and_shape_are_recorded():
+    plain = build(json.dumps(SET))
+    assert all(not r.fenced and r.shape == "list" for r in plain)
+    fenced = build("```json\n" + json.dumps({"ideas": SET}) + "\n```")
+    assert all(r.fenced and r.shape == "ideas_object" for r in fenced)
+    assert all(r.valid for r in fenced)
+
+
 def test_card_list_must_match_k():
     with pytest.raises(ValueError):
         records_from_set(

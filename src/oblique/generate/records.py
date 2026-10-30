@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from oblique.generate.labels import LabelResult, LabelStatus, classify_method, classify_opportunity
 from oblique.generate.schema import IdeaCard
-from oblique.generate.validate import InvalidReason, ParsedSet
+from oblique.generate.validate import InvalidReason, ParsedSet, Shape
 from oblique.llm import Usage
 
 
@@ -38,6 +38,8 @@ class GenerationRecord(BaseModel):
     tokens_out: int = 0
     tokens_reasoning: int = 0
 
+    fenced: bool = False  # response came wrapped in one ```json block (ADR-006 amendment 2)
+    shape: Shape | None = None  # "list" or "ideas_object" (ADR-006 amendment 4)
     valid: bool
     invalid_reason: InvalidReason | None = None
     invalid_detail: str | None = None
@@ -95,6 +97,8 @@ def records_from_set(
         "seed": seed,
         "attempt": attempt,
         "call_key": call_key,
+        "fenced": parsed.fenced,
+        "shape": parsed.shape,
         "tokens_in": usage.tokens_in,
         "tokens_cached": usage.tokens_cached,
         "tokens_out": usage.tokens_out,

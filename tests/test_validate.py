@@ -52,7 +52,6 @@ def test_text_is_kept_verbatim():
     [
         "not json",
         '[{"problem_gap": "x"',
-        "```json\n[]\n```",  # code fences are not JSON
         "",
         None,
     ],
@@ -62,6 +61,84 @@ def test_unparseable_json_invalidates_all_and_is_retryable(text):
     assert parsed.valid == []
     assert reasons(parsed) == [InvalidReason.json_error] * 3
     assert parsed.retryable
+    assert not parsed.fenced
+
+
+# --- Code fences (amendment 2) ----------------------------------------------
+
+THREE = json.dumps([idea(), idea(), idea()], indent=2)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"```json\n{THREE}\n```",
+        f"```\n{THREE}\n```",
+        f"  \n```json\n{THREE}\n```\n\n",  # whitespace around the block is fine
+        f"```json  \r\n{THREE}\r\n```",
+        f"```json\n{THREE}```",  # closing fence right after the JSON
+    ],
+)
+def test_single_whole_response_fence_is_unwrapped(text):
+    parsed = parse_set(text, k=3)
+    assert len(parsed.valid) == 3
+    assert parsed.fenced
+
+
+def test_unfenced_response_is_not_marked_fenced():
+    assert not parse_set(THREE, k=3).fenced
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"Here are the ideas:\n```json\n{THREE}\n```",  # text before
+        f"```json\n{THREE}\n```\nHope this helps!",  # text after
+        f"```json\n{THREE}\n```\n```json\n{THREE}\n```",  # two blocks
+        f"```python\n{THREE}\n```",  # other language tag
+        f"```json {THREE}```",  # no newline after the opening fence
+    ],
+)
+def test_anything_else_around_the_json_is_json_error(text):
+    parsed = parse_set(text, k=3)
+    assert reasons(parsed) == [InvalidReason.json_error] * 3
+    assert parsed.retryable
+
+
+def test_fenced_invalid_set_keeps_fenced_flag():
+    parsed = parse_set("```json\n[]\n```", k=3)
+    assert reasons(parsed) == [InvalidReason.wrong_count] * 3
+    assert parsed.fenced
+
+
+# --- Shape (amendment 4) ----------------------------------------------------
+
+
+def test_shape_is_recorded():
+    assert parse_set(json.dumps([idea()]), k=1).shape == "list"
+    assert parse_set(json.dumps({"ideas": [idea()]}), k=1).shape == "ideas_object"
+    assert parse_set(json.dumps({"ideas": [idea()] * 2}), k=1).shape == "ideas_object"
+    assert parse_set("nope", k=1).shape is None
+    assert parse_set(json.dumps({"other": []}), k=1).shape is None
+
+
+def test_ideas_key_must_hold_a_list():
+    parsed = parse_set(json.dumps({"ideas": "text"}), k=1)
+    assert reasons(parsed) == [InvalidReason.bad_shape]
+
+
+# --- Retry seed (amendment 3) -----------------------------------------------
+
+
+def test_api_seed_never_collides_with_another_sample():
+    from oblique.generate.validate import api_seed
+
+    seeds = {api_seed(s, a) for s in range(3) for a in range(2)}
+    assert len(seeds) == 6
+    assert api_seed(0, 0) == 0
+    assert api_seed(2, 1) == 1002
+    with pytest.raises(ValueError):
+        api_seed(1000, 0)
 
 
 @pytest.mark.parametrize("n", [0, 2, 4])
