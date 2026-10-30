@@ -18,6 +18,7 @@ from oblique.prompts import (
     quality_messages,
     render_card,
 )
+from oblique.prompts.ideation import METHOD_DEFINITIONS, OPPORTUNITY_DEFINITIONS
 
 PAPERS = Instance(
     id="i-0001",
@@ -38,9 +39,9 @@ IDEA = IdeaCard(
     inspiration="Paper 1's X and Paper 2's Y.",
 )
 
-# Changing a template changes its hash: bump the version (ideation-v2, ...) and update here.
+# Changing a template changes its hash: bump the version (ideation-v3, ...) and update here.
 FROZEN = {
-    "ideation-v1": "eeebc9dfcf04a5d7",
+    "ideation-v2": "cbadaa8eb5837db2",
     "quality-v1": "a6faec078dabf17b",
     "distance-v1": "28a29c13b725e007",
     "grounding-v1": "b8fdc3ca41e79408",
@@ -54,10 +55,15 @@ def test_registry_ids_and_hashes():
     assert {i: p.hash for i, p in PROMPTS.items()} == FROZEN
 
 
-def test_ideation_lists_every_canonical_label():
+def test_ideation_defines_every_canonical_label_in_one_line():
+    assert tuple(OPPORTUNITY_DEFINITIONS) == OPPORTUNITY_PATTERNS
+    assert tuple(METHOD_DEFINITIONS) == METHOD_PARADIGMS
     system = ideation_messages(PAPERS, 3)[0]["content"]
-    for label in OPPORTUNITY_PATTERNS + METHOD_PARADIGMS:
-        assert f"[{label}]" in system
+    lines = system.splitlines()
+    for definitions in (OPPORTUNITY_DEFINITIONS, METHOD_DEFINITIONS):
+        for label, text in definitions.items():
+            assert text and "\n" not in text
+            assert f"- [{label}]: {text}" in lines
     assert '{"ideas": [ ... ]}' in system
     for field in ("problem_gap", "core_claim", "method", "inspiration"):
         assert f'"{field}"' in system
@@ -67,9 +73,9 @@ def test_ideation_user_message_puts_papers_first():
     user = ideation_messages(PAPERS, 3)[1]["content"]
     assert user.startswith("<papers>")
     assert "First summary with {braces}." in user
-    assert "Propose 3 research ideas" in user and "exactly 3 objects" in user
+    assert "Propose 3 distinct research ideas based on" in user and "exactly 3 objects" in user
     one = ideation_messages(PAPERS, 1)[1]["content"]
-    assert "Propose one research idea" in one and "exactly 1 object." in one
+    assert "Propose 1 distinct research idea based on" in one and "exactly 1 object." in one
 
 
 def test_ideation_calls_share_the_prefix():
