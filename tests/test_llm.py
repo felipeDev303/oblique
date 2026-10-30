@@ -1,0 +1,212 @@
+"""LLM client tests. A fake transport stands in for the API: nothing here makes a network call."""
+
+import asyncio
+
+import httpx
+import openai
+import pytest
+from tenacity import wait_none
+
+from oblique.cache import Cache
+from oblique.llm import LLMClient, Usage
+
+MSGS = [{"role": "user", "content": "propose an idea"}]
+
+
+def _response(content: str = "ok", *, reasoning: str | None = None) -> dict:
+    message = {"role": "assistant", "content": content}
+    if reasoning is not None:
+        message["reasoning_content"] = reasoning
+    return {
+        "id": "x",
+        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "prompt_tokens_details": {"cached_tokens": 80},
+            "completion_tokens_details": {"reasoning_tokens": 7},
+        },
+    }
+
+
+class _Raw:
+    def __init__(self, data: dict):
+        self._data = data
+
+    def model_dump(self) -> dict:
+        return self._data
+
+
+def _status_error(cls, status: int):
+    request = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    return cls("boom", response=httpx.Response(status, request=request), body=None)
+
+
+class FakeTransport:
+    """Mimics `AsyncOpenAI().chat.completions.create`."""
+
+    def __init__(self, script=None, delay: float = 0.0):
+        self.script = list(script or [])
+        self.delay = delay
+        self.calls: list[dict] = []
+        self.active = 0
+        self.max_active = 0
+        self.chat = self
+        self.completions = self
+
+    async def create(self, **request):
+        self.calls.append(request)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(self.delay)
+            item = self.script.pop(0) if self.script else _response(f"r{len(self.calls)}")
+            if isinstance(item, Exception):
+                raise item
+            return _Raw(item)
+        finally:
+            self.active -= 1
+
+
+@pytest.fixture
+def cache(tmp_path):
+    with Cache(tmp_path / "llm.db") as c:
+        yield c
+
+
+def _client(cache, transport, **kw):
+    return LLMClient("meta", cache, client=transport, wait=wait_none(), **kw)
+
+
+def test_second_identical_call_is_served_from_cache(cache):
+    transport = FakeTransport([_response("first")])
+    llm = _client(cache, transport)
+
+    async def run():
+        a = await llm.complete("muse-spark", MSGS, params={"temperature": 1.0})
+        b = await llm.complete("muse-spark", MSGS, params={"temperature": 1.0})
+        return a, b
+
+    a, b = asyncio.run(run())
+    assert len(transport.calls) == 1
+    assert (a.content, a.from_cache) == ("first", False)
+    assert (b.content, b.from_cache) == ("first", True)
+    assert llm.stats.cache_hits == 1
+    assert transport.calls[0] == {"model": "muse-spark", "messages": MSGS, "temperature": 1.0}
+
+
+def test_cache_survives_a_new_client(cache):
+    asyncio.run(_client(cache, FakeTransport()).complete("m", MSGS))
+    transport = FakeTransport()
+    result = asyncio.run(_client(cache, transport).complete("m", MSGS))
+    assert result.from_cache
+    assert transport.calls == []
+
+
+def test_sample_idx_and_attempt_make_distinct_calls(cache):
+    transport = FakeTransport()
+    llm = _client(cache, transport)
+
+    async def run():
+        for s in range(3):
+            await llm.complete("m", MSGS, sample_idx=s)
+        await llm.complete("m", MSGS, sample_idx=0, attempt=1)
+
+    asyncio.run(run())
+    assert len(transport.calls) == 4
+
+
+def test_concurrent_identical_requests_are_deduplicated(cache):
+    transport = FakeTransport(delay=0.05)
+    llm = _client(cache, transport)
+
+    async def run():
+        return await asyncio.gather(*(llm.complete("m", MSGS) for _ in range(5)))
+
+    results = asyncio.run(run())
+    assert len(transport.calls) == 1
+    assert {r.content for r in results} == {"r1"}
+    assert llm.stats.deduplicated == 4
+
+
+def test_semaphore_bounds_concurrency(cache):
+    transport = FakeTransport(delay=0.02)
+    llm = _client(cache, transport, concurrency=3)
+
+    async def run():
+        await asyncio.gather(*(llm.complete("m", MSGS, sample_idx=i) for i in range(12)))
+
+    asyncio.run(run())
+    assert len(transport.calls) == 12
+    assert transport.max_active == 3
+
+
+def test_transient_errors_are_retried_and_not_cached(cache):
+    transport = FakeTransport(
+        [
+            _status_error(openai.RateLimitError, 429),
+            _status_error(openai.InternalServerError, 503),
+            _response("finally"),
+        ]
+    )
+    llm = _client(cache, transport)
+    result = asyncio.run(llm.complete("m", MSGS))
+    assert result.content == "finally"
+    assert len(transport.calls) == 3
+    assert llm.stats.retries == 2
+    assert llm.stats.rate_limited == 1
+    assert len(cache) == 1
+
+
+def test_gives_up_after_max_attempts_and_caches_nothing(cache):
+    transport = FakeTransport([_status_error(openai.RateLimitError, 429)] * 3)
+    llm = _client(cache, transport, max_attempts=3)
+    with pytest.raises(openai.RateLimitError):
+        asyncio.run(llm.complete("m", MSGS))
+    assert len(transport.calls) == 3
+    assert len(cache) == 0
+
+
+def test_non_retryable_errors_fail_immediately(cache):
+    transport = FakeTransport([_status_error(openai.BadRequestError, 400)])
+    llm = _client(cache, transport)
+    with pytest.raises(openai.BadRequestError):
+        asyncio.run(llm.complete("m", MSGS))
+    assert len(transport.calls) == 1
+    assert len(cache) == 0
+
+
+def test_unparseable_model_output_is_still_cached(cache):
+    transport = FakeTransport([_response("this is not json {")])
+    llm = _client(cache, transport)
+    asyncio.run(llm.complete("m", MSGS))
+    assert len(cache) == 1
+
+
+def test_tokens_are_recorded(cache):
+    llm = _client(cache, FakeTransport())
+
+    async def run():
+        await llm.complete("m", MSGS, sample_idx=0)
+        await llm.complete("m", MSGS, sample_idx=1)
+        return await llm.complete("m", MSGS, sample_idx=0)  # cache hit: not paid again
+
+    result = asyncio.run(run())
+    assert result.usage == Usage(tokens_in=100, tokens_cached=80, tokens_out=20, tokens_reasoning=7)
+    assert llm.stats.api_calls == 2
+    assert llm.stats.usage == Usage(200, 160, 40, 14)
+
+
+def test_reasoning_is_separated_from_content(cache):
+    transport = FakeTransport([_response("answer", reasoning="thinking...")])
+    result = asyncio.run(_client(cache, transport).complete("m", MSGS))
+    assert result.content == "answer"
+    assert result.reasoning == "thinking..."
+
+
+def test_missing_credentials_raise_clear_error(cache, monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_BASE_URL", raising=False)
+    llm = LLMClient("baseten", cache)
+    with pytest.raises(RuntimeError, match="BASETEN"):
+        asyncio.run(llm.complete("m", MSGS))
