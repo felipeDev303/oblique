@@ -22,8 +22,12 @@ runs/**
 !runs/.gitkeep
 !runs/**/summary.md
 
-# Caches
+# Caches (the LLM response cache holds every paid response: back it up outside the repo)
 .cache/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
