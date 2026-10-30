@@ -171,7 +171,7 @@ def test_transport_retries_keep_the_same_cache_key(cache):
     )
     llm = _client(cache, transport)
     result = asyncio.run(llm.complete("m", MSGS, params={"temperature": 1.0}, sample_idx=2))
-    expected = make_key("m", MSGS, {"temperature": 1.0}, sample_idx=2, attempt=0)
+    expected = make_key("m", MSGS, {"temperature": 1.0}, sample_idx=2, attempt=0, provider="meta")
     assert result.key == expected
     assert len(transport.calls) == 3
     assert all(call == transport.calls[0] for call in transport.calls)  # identical requests

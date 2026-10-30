@@ -38,16 +38,20 @@ def make_key(
     params: dict[str, Any],
     sample_idx: int = 0,
     attempt: int = 0,
+    *,
+    provider: str,
 ) -> str:
     """Hash of everything that determines a response.
 
+    `provider` separates the same model and request served by different
+    endpoints or accounts (Model API, Baseten), which may answer differently.
     `sample_idx` separates independent samples of the same request (e.g. the
     three draws of C0), which would otherwise collide in the cache.
     `attempt` separates a retry from the original call, so a retry never
     returns the cached failure and never collides with another sample.
     """
     blob = json.dumps(
-        {"m": model, "msg": messages, "p": params, "s": sample_idx, "a": attempt},
+        {"pr": provider, "m": model, "msg": messages, "p": params, "s": sample_idx, "a": attempt},
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
