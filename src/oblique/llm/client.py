@@ -165,10 +165,10 @@ class LLMClient:
         """One chat completion, served from the cache when possible.
 
         `params` go to the API verbatim (temperature, max_tokens, seed, ...)
-        and are part of the cache key, as are `sample_idx` and `attempt`.
+        and are part of the cache key, as are the provider, `sample_idx` and `attempt`.
         """
         params = dict(params or {})
-        key = make_key(model, messages, params, sample_idx, attempt)
+        key = make_key(model, messages, params, sample_idx, attempt, provider=self.provider.name)
 
         cached = self.cache.get(key)
         if cached is not None:
