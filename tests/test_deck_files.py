@@ -7,7 +7,7 @@ from datetime import date
 import pytest
 
 from oblique.deck import Card, Family, dump_card, load_card, load_deck, write_card
-from oblique.deck.controls import DECK_DIR, N_CONTROLS, control_cards, draw_words
+from oblique.deck.controls import DECK_DIR, N_CONTROLS, control_cards, draw_words, pick_controls
 
 
 def test_committed_deck_loads_and_has_the_planned_composition():
@@ -69,3 +69,10 @@ def test_committed_controls_match_the_documented_method():
     deck = load_deck(DECK_DIR)
     expected = draw_words(controls.common_nouns())
     assert [deck[f"CTRL-R-{i:03d}"].text for i in range(1, N_CONTROLS + 1)] == expected
+
+
+def test_pick_controls_is_seeded_and_order_independent():
+    ids = [f"CTRL-R-{i:03d}" for i in range(1, 31)]
+    picked = pick_controls(ids, 10)
+    assert len(set(picked)) == 10 and set(picked) <= set(ids) and picked == sorted(picked)
+    assert picked == pick_controls(list(reversed(ids)), 10)

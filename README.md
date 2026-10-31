@@ -68,6 +68,12 @@ tests/
 - Quality measured against an anchor idea from the same model (one K = 1 draw per instance at a reserved `sample_idx`, ADR-008), with q against the gold kept as a secondary metric. Each client now has its own concurrency limit, optionally adaptive (halves on a 429), and a 180 s timeout. Validation (R-20261030-04, US$0.04): q leaves the ceiling, C0 0.58 and C1 0.16, but the judge favours longer ideas (r = 0.50) and C1's ideas are shorter; controlling for length, the C1 effect drops from −0.42 to −0.19 [−0.35, 0.00].
 - Length control and sequential generation (ADR-009): `ideation-v3` caps the words of each field, `quality-v2` adds that length and detail are not merits in themselves, and the new baseline C1s writes each idea in its own call, conditioned on the earlier ones with a fixed text. A logistic regression gives the win rate at equal length as a sensitivity analysis. A judgment refused by the provider's content filter now counts as missing instead of stopping the run. Validation (R-20261030-05, US$0.18): C1s matches C0 in length (76 words each), q 0.56 against 0.50, C1s − C0 +0.09 [−0.07, 0.25], and keeps most of C1's diversity.
 
+### Oct 31 (Day 6)
+
+- Content filter rule (ADR-006, amendment 6): one identical retry, then a filtered generation is invalid (`content_filtered`, q = 0) and a filtered judgment is a missing value. A run never stops for a filter.
+- Map sweep runner (`python -m oblique.map_sweep`, with a `--plan` mode that counts calls, cost and time without calling the API): anchors, S0 = C1s, and one idea per card and instance, with the `inject-v1` frame around each card; quality against the anchor, grounding and distance to S0. A run resumes from the response cache, and a spend ledger keeps its budget across launches. Reports q controlled for length (joint logistic regression at equal length) and raw q, d, m, grounding, and invalid and filtered rates with CIs, plus the ADR-003 bands.
+- Judge concurrency limit that climbs by one after 50 straight successes up to a ceiling and halves on a 429.
+
 ## License
 
 Code: [MIT](LICENSE). The card deck (`deck/cards/`) is released under [CC BY 4.0](deck/LICENSE).
