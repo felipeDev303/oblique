@@ -5,7 +5,9 @@ import json
 import re
 from types import SimpleNamespace
 
+import httpx
 import numpy as np
+import openai
 import pytest
 import yaml
 from tenacity import wait_none
@@ -172,6 +174,57 @@ def test_report_has_length_q_and_controlled_rates(run):
     assert set(controlled["rates"]) == {"C0", "C1", "C1s"}
     assert set(controlled["differences"]) == {"C1-C0", "C1s-C0", "C1s-C1"}
     assert result["embedding_distance"]["C1s"]["n"] == 20
+
+
+def _status_400(message: str) -> openai.BadRequestError:
+    req = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    return openai.BadRequestError(message, response=httpx.Response(400, request=req), body=None)
+
+
+class FilteredAPI(FakeAPI):
+    """The provider refuses the first grounding request; `message` is its error text."""
+
+    def __init__(self, message: str):
+        super().__init__()
+        self.message = message
+        self.refused = False
+
+    async def create(self, **request):
+        if "You assess how much" in request["messages"][0]["content"] and not self.refused:
+            self.refused = True
+            raise _status_400(self.message)
+        return await super().create(**request)
+
+
+def _check(tmp_path, monkeypatch, api):
+    cfg = yaml.safe_load(open("configs/R-20261030-05.yaml", encoding="utf-8"))
+    cfg["cache"] = str(tmp_path / "cache.db")
+    cfg["instances"] = baseline.pick_baseline(INSTANCES)
+    cfg["n_boot"] = 20
+    monkeypatch.setattr(baseline, "load_instances", lambda split: INSTANCES)
+    return length_check.LengthCheck(
+        cfg, out=tmp_path / "run", transport=api, wait=wait_none(), embedder=FakeEmbedder()
+    )
+
+
+def test_a_content_filtered_judgment_is_counted_as_missing(tmp_path, monkeypatch):
+    message = (
+        "The response was filtered due to the prompt triggering our content management policy."
+    )
+    check = _check(tmp_path, monkeypatch, FilteredAPI(message))
+    asyncio.run(check.run())
+    result = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))
+    assert len(result["content_filtered"]) == 1
+    assert result["content_filtered"][0]["judge"] == "grounding-spark"
+    assert sum(v is None for v in check.ground.values()) == 1
+    rows = (tmp_path / "run" / "judgments.jsonl").read_text("utf-8").splitlines()
+    assert sum('"content_filter"' in r for r in rows) == 1
+
+
+def test_any_other_400_still_stops_the_run(tmp_path, monkeypatch):
+    check = _check(tmp_path, monkeypatch, FilteredAPI("invalid parameter"))
+    with pytest.raises(openai.BadRequestError):
+        asyncio.run(check.run())
 
 
 def test_distribution():

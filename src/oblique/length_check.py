@@ -199,6 +199,7 @@ class LengthCheck(Baseline):
                 "spent_usd": round(self.spent_usd, 4),
                 "anchors_valid": sum(a is not None for a in self.anchors.values()),
                 "invalid_ideas": invalid,
+                "content_filtered": self.content_filtered,
                 "retried_generations": sum(
                     r.attempt > 0 for recs in self.slots.values() for r in recs
                 ),

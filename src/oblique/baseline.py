@@ -33,6 +33,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import openai
 import yaml
 
 from oblique.bench import Instance, load_instances, pick_baseline
@@ -66,6 +67,7 @@ K = 3
 CONDITIONS = ("C0", "C1")
 ANCHOR_SAMPLE_IDX = 500  # reserved (ADR-008): one anchor per instance, shared by all conditions
 SEQUENTIAL_SAMPLE_BASE = 100  # the first idea of a sequence reads like C0's: never the same draw
+CONTENT_FILTER = "content management policy"  # in the provider's 400 message
 SetKey = tuple[str, str]  # (instance, condition)
 
 
@@ -95,6 +97,7 @@ class Baseline(Smoke):
         self.d_emb: dict[tuple[str, str, int, int], float] = {}
         self.ground: dict[tuple[str, str, int], float | None] = {}
         self.progress = defaultdict(int)
+        self.content_filtered: list[dict[str, Any]] = []
         self.conditions = tuple(cfg.get("conditions", CONDITIONS))
 
     def prompt(self, name: str) -> Prompt:
@@ -205,9 +208,39 @@ class Baseline(Smoke):
     # --- judges ---------------------------------------------------------------
 
     async def judge_call(self, client, judge: str, prompt, mode, messages, parse, ids: dict):
-        """One judge call with one retry on a broken output contract."""
+        """One judge call with one retry on a broken output contract.
+
+        A request refused by the provider's content filter is a missing value, not a crash:
+        it is logged and counted, never reworded or retried.
+        """
         for attempt in (0, 1):
-            c = await self.call(judge, mode, messages, attempt=attempt, client=client, extra=ids)
+            try:
+                c = await self.call(
+                    judge, mode, messages, attempt=attempt, client=client, extra=ids
+                )
+            except openai.BadRequestError as e:
+                if CONTENT_FILTER not in str(e):
+                    raise
+                self.content_filtered.append({"judge": judge, **ids})
+                self.judge_rows.append(
+                    {
+                        "run_id": self.run_id,
+                        "card": None,
+                        "judge": judge,
+                        "model": mode["model"],
+                        "prompt_hash": prompt.hash,
+                        "seed": None,
+                        "attempt": attempt,
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                        "call_key": None,
+                        "raw": None,
+                        "parsed": None,
+                        "parse_error": "content_filter",
+                        **ids,
+                    }
+                )
+                return None
             try:
                 value, error = parse(c.content), None
             except JudgeOutputError as e:
