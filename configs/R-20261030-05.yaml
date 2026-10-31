@@ -29,6 +29,9 @@ judges:
 
 budget:
   approved_usd: 0.30
-  stop_usd: 0.26             # no new call past this; calls in flight stay under the approval
+  # The spend counter starts at 0 on a resume and cached calls cost nothing. The first launch
+  # spent US$0.10 (stopped by a content-filter 400), so the resumed run stops at 0.16 of the
+  # remaining 0.20; calls in flight stay under the approval.
+  stop_usd: 0.16
   prices_per_m:
     muse-spark-1.3-contributor: {in: 0.10, cached: 0.002, out: 0.20}   # Billing, 2026-10-30
