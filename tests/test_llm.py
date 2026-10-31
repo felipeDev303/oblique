@@ -9,6 +9,7 @@ from tenacity import wait_none
 
 from oblique.cache import Cache
 from oblique.llm import LLMClient, Usage
+from oblique.llm.client import ConcurrencyLimiter
 
 MSGS = [{"role": "user", "content": "propose an idea"}]
 
@@ -139,6 +140,44 @@ def test_semaphore_bounds_concurrency(cache):
     asyncio.run(run())
     assert len(transport.calls) == 12
     assert transport.max_active == 3
+
+
+def test_default_timeout_is_180_seconds(cache):
+    assert LLMClient("meta", cache).timeout == 180.0
+
+
+def test_fixed_limit_ignores_429s(cache):
+    transport = FakeTransport([_status_error(openai.RateLimitError, 429), _response("ok")])
+    llm = _client(cache, transport, concurrency=8)
+    asyncio.run(llm.complete("m", MSGS))
+    assert llm.stats.rate_limited == 1
+    assert llm.limiter.limit == 8 and llm.stats.limit_reductions == 0
+
+
+def test_adaptive_limit_halves_on_a_429_and_stays_down(cache):
+    transport = FakeTransport([_status_error(openai.RateLimitError, 429), _response("ok")])
+    llm = _client(cache, transport, concurrency=8, adaptive=True)
+
+    async def run():
+        await llm.complete("m", MSGS)
+        await asyncio.gather(*(llm.complete("m", MSGS, sample_idx=i + 1) for i in range(8)))
+
+    transport.delay = 0.01
+    asyncio.run(run())
+    assert llm.limiter.limit == 4 and llm.stats.limit_reductions == 1
+    assert transport.max_active <= 4
+
+
+def test_one_burst_of_429s_lowers_the_limit_once():
+    limiter = ConcurrencyLimiter(8, adaptive=True)
+    started = limiter.epoch
+    assert limiter.on_rate_limited(started) is True
+    # Other calls of the same burst, started before the reduction, do not reduce again.
+    assert limiter.on_rate_limited(started) is False
+    assert limiter.limit == 4
+    assert limiter.on_rate_limited(limiter.epoch) is True and limiter.limit == 2
+    assert limiter.on_rate_limited(limiter.epoch) is True and limiter.limit == 1
+    assert limiter.on_rate_limited(limiter.epoch) is False and limiter.limit == 1
 
 
 def test_transient_errors_are_retried_and_not_cached(cache):

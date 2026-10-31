@@ -97,9 +97,14 @@ class Smoke:
         self.notes: dict[str, Any] = {}
         self.spent_usd = 0.0
 
-    def new_client(self, provider: str, concurrency: int = 1) -> LLMClient:
+    def new_client(self, provider: str, concurrency: int = 1, *, adaptive: bool = False):
         return LLMClient(
-            provider, self.cache, concurrency=concurrency, client=self.transport, wait=self.wait
+            provider,
+            self.cache,
+            concurrency=concurrency,
+            adaptive=adaptive,
+            client=self.transport,
+            wait=self.wait,
         )
 
     def client(self, provider: str) -> LLMClient:

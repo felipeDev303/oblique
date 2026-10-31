@@ -1,10 +1,13 @@
-"""quality-v1: pairwise comparison of a generated idea against the gold idea.
+"""quality-v1: pairwise comparison of a generated idea against a reference idea.
 
 The judge sees two ideas, A and B, and names the stronger one. Each idea is
 judged in both orders (idea as A, then as B), so q is in {0, 0.5, 1}. The
 generated idea is shown as Problem / Claim / Approach (problem_gap, core_claim,
 method) with its leading labels removed and without inspiration, because the
 gold idea has neither (ADR-006 amendment 5). No date is shown.
+
+The reference is the anchor idea, rendered the same way (primary q, ADR-008), or
+the gold insight as it stands (secondary q).
 """
 
 from __future__ import annotations
@@ -47,10 +50,10 @@ def render_card(idea: IdeaCard) -> str:
 
 
 def quality_messages(
-    idea: IdeaCard, gold: str, *, idea_first: bool, prompt: Prompt = QUALITY_V1
+    idea: IdeaCard, reference: str, *, idea_first: bool, prompt: Prompt = QUALITY_V1
 ) -> list[dict[str, str]]:
-    card, gold = render_card(idea), gold.strip()
-    a, b = (card, gold) if idea_first else (gold, card)
+    card, reference = render_card(idea), reference.strip()
+    a, b = (card, reference) if idea_first else (reference, card)
     return prompt.messages(idea_a=a, idea_b=b)
 
 
