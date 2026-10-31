@@ -111,6 +111,14 @@ IDEATION_V3 = Prompt(
 )
 
 
+# The frame around a card (Arquitectura): after the documents, before the task. A card is one
+# more fixed block, so it has its own version and ideation-v3 itself does not change.
+INJECT_TEXT = """Before writing this idea, apply the following oblique constraint to how you approach the documents: «{card}». Do not mention the constraint in the idea.
+
+"""
+INJECT_V1 = Prompt("inject-v1", "", INJECT_TEXT)
+
+
 def render_previous(previous: Sequence[IdeaCard]) -> str:
     """The earlier ideas of a sequential set, exactly as generated; empty for the first idea."""
     if not previous:
@@ -126,17 +134,18 @@ def ideation_messages(
     k: int,
     prompt: Prompt = IDEATION_V3,
     previous: Sequence[IdeaCard] = (),
+    card: str | None = None,
 ) -> list[dict[str, str]]:
-    """K ideas in one call, or with `previous` one more idea of a sequential set."""
+    """K ideas in one call; with `previous`, one more idea of a sequential set; with `card`,
+    one idea written under that card."""
     if k < 1:
         raise ValueError("k must be >= 1")
-    if previous and (k != 1 or "{previous}" not in prompt.user):
-        raise ValueError(
-            f"sequential generation needs k = 1 and a {{previous}} slot in {prompt.id}"
-        )
+    if (previous or card is not None) and (k != 1 or "{previous}" not in prompt.user):
+        raise ValueError(f"a sequence or a card needs k = 1 and a {{previous}} slot in {prompt.id}")
+    constraint = "" if card is None else INJECT_V1.user.format(card=card)
     return prompt.messages(
         papers=render_papers(papers),
-        previous=render_previous(previous),
+        previous=render_previous(previous) + constraint,
         k=str(k),
         noun="idea" if k == 1 else "ideas",
         objects="object" if k == 1 else "objects",
