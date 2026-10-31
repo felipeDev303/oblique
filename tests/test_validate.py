@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from oblique.generate.validate import InvalidReason, parse_set
+from oblique.generate.validate import InvalidReason, filtered_set, parse_set
 
 
 def idea(**overrides) -> dict:
@@ -191,3 +191,9 @@ def test_slots_keep_their_position():
 def test_k_must_be_positive():
     with pytest.raises(ValueError):
         parse_set("[]", k=0)
+
+
+def test_filtered_set_is_invalid_and_not_retryable():
+    parsed = filtered_set(3)
+    assert parsed.k == 3 and parsed.valid == [] and not parsed.retryable
+    assert {s.reason for s in parsed.invalid} == {InvalidReason.content_filtered}

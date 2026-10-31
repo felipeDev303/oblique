@@ -28,7 +28,7 @@ import yaml
 
 from oblique.bench import load_instances
 from oblique.generate.validate import parse_set
-from oblique.prompts import ideation_messages
+from oblique.prompts import IDEATION_V2, ideation_messages
 from oblique.smoke import BudgetExceeded, MissingModels, Smoke, load_env
 
 GATE_SAMPLE_BASE = 9000
@@ -58,9 +58,14 @@ class Gate(Smoke):
     async def cache_test(self, instance) -> None:
         gen = self.cfg["generator"]
         base = GATE_SAMPLE_BASE
-        first = await self.call("cache k=3", gen, ideation_messages(instance, 3), sample_idx=base)
+        first = await self.call(
+            "cache k=3", gen, ideation_messages(instance, 3, IDEATION_V2), sample_idx=base
+        )
         second = await self.call(
-            "cache k=1 (same prefix)", gen, ideation_messages(instance, 1), sample_idx=base
+            "cache k=1 (same prefix)",
+            gen,
+            ideation_messages(instance, 1, IDEATION_V2),
+            sample_idx=base,
         )
         self.notes["cache"] = {
             "instance": instance.id,
@@ -74,7 +79,7 @@ class Gate(Smoke):
     async def temperature_test(self, instance) -> None:
         gen, cfg = self.cfg["generator"], self.cfg["temperature"]
         candidates = [round(cfg["max"] - i * cfg["step"], 2) for i in range(cfg["tries"])]
-        messages = ideation_messages(instance, 3)
+        messages = ideation_messages(instance, 3, IDEATION_V2)
         c, params = await self.first_accepted(
             "temperature probe",
             gen,
@@ -118,7 +123,7 @@ class Gate(Smoke):
                         c = await self.call(
                             f"concurrency {level} wave {wave}",
                             gen,
-                            ideation_messages(x, 3),
+                            ideation_messages(x, 3, IDEATION_V2),
                             sample_idx=sample_idx,
                             client=client,
                             extra={"level": level, "wave": wave, "instance": x.id},

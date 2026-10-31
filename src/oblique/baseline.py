@@ -38,20 +38,22 @@ import yaml
 from oblique.bench import Instance, load_instances, pick_baseline
 from oblique.generate.records import GenerationRecord, records_from_set, write_jsonl
 from oblique.generate.schema import IdeaCard
-from oblique.generate.validate import parse_set
+from oblique.generate.validate import filtered_set, parse_set
+from oblique.llm import ContentFilteredError, Usage
 from oblique.metrics import bootstrap_mean_ci, creative_utility, paired_delta_ci
 from oblique.metrics.calibration import agreement, pearson, position_consistency, spearman
 from oblique.prompts import (
     DISTANCE_V1,
     GROUNDING_V1,
-    IDEATION_V2,
-    QUALITY_V1,
+    PROMPTS,
     JudgeOutputError,
+    Prompt,
     distance,
     distance_messages,
     grounding,
     grounding_messages,
     ideation_messages,
+    judged_words,
     parse_grounding,
     parse_similarity,
     parse_winner,
@@ -64,6 +66,7 @@ from oblique.smoke import MissingModels, Smoke, load_env, write_jsonl_dicts
 K = 3
 CONDITIONS = ("C0", "C1")
 ANCHOR_SAMPLE_IDX = 500  # reserved (ADR-008): one anchor per instance, shared by all conditions
+SEQUENTIAL_SAMPLE_BASE = 100  # the first idea of a sequence reads like C0's: never the same draw
 SetKey = tuple[str, str]  # (instance, condition)
 
 
@@ -93,6 +96,15 @@ class Baseline(Smoke):
         self.d_emb: dict[tuple[str, str, int, int], float] = {}
         self.ground: dict[tuple[str, str, int], float | None] = {}
         self.progress = defaultdict(int)
+        self.content_filtered: list[dict[str, Any]] = []
+        self.conditions = tuple(cfg.get("conditions", CONDITIONS))
+
+    def prompt(self, name: str) -> Prompt:
+        """The version of a prompt this run's config names, e.g. "quality" -> quality-v2."""
+        found = [p for p in self.cfg["prompts"] if p.startswith(f"{name}-")]
+        if len(found) != 1:
+            raise SystemExit(f"config must name exactly one {name} prompt, got {found}")
+        return PROMPTS[found[0]]
 
     # --- setup ----------------------------------------------------------------
 
@@ -117,29 +129,39 @@ class Baseline(Smoke):
 
     # --- generation -----------------------------------------------------------
 
-    async def generate_call(self, client, x: Instance, condition: str, k: int, sample_idx: int):
+    async def generate_call(
+        self, client, x: Instance, condition: str, k: int, sample_idx: int, previous=()
+    ):
         gen = self.cfg["generator"]
-        messages = ideation_messages(x, k)
+        ideation = self.prompt("ideation")
+        messages = ideation_messages(x, k, ideation, previous)
         extra = {"instance": x.id, "condition": condition}
-        c = await self.call(f"gen {condition}", gen, messages, sample_idx=sample_idx,
-                            client=client, extra=extra)  # fmt: skip
-        parsed, attempt = parse_set(c.content, k), 0
-        if parsed.retryable:  # ADR-006: one retry, json_error only
-            attempt = 1
-            c = await self.call(f"gen {condition} retry", gen, messages, sample_idx=sample_idx,
-                                attempt=1, client=client, extra=extra)  # fmt: skip
+        attempt = 0
+        try:
+            c = await self.call(f"gen {condition}", gen, messages, sample_idx=sample_idx,
+                                client=client, extra=extra)  # fmt: skip
             parsed = parse_set(c.content, k)
+            if parsed.retryable:  # ADR-006: one retry, json_error only
+                attempt = 1
+                c = await self.call(f"gen {condition} retry", gen, messages, sample_idx=sample_idx,
+                                    attempt=1, client=client, extra=extra)  # fmt: skip
+                parsed = parse_set(c.content, k)
+            call_key, usage = c.key, c.usage
+        except ContentFilteredError as e:
+            # Invalid, q = 0, reported apart; the run goes on (ADR-006, amendment 6).
+            self.content_filtered.append({"judge": "generation", "attempt": attempt, **extra})
+            parsed, call_key, usage = filtered_set(k), e.key, Usage()
         records = records_from_set(
             parsed,
             cards=[None] * k,
             run_id=self.run_id,
             instance=x.id,
             condition=condition,
-            model=c.model,
-            prompt_hash=IDEATION_V2.hash,
+            model=gen["model"],
+            prompt_hash=ideation.hash,
             seed=None,
-            call_key=c.key,
-            usage=c.usage,
+            call_key=call_key,
+            usage=usage,
             attempt=attempt,
         )
         self.progress["generations"] += 1
@@ -158,7 +180,19 @@ class Baseline(Smoke):
         async def c1(x):
             return await self.generate_call(client, x, "C1", K, 0)
 
-        jobs = {(x.id, "C0"): c0(x) for x in instances} | {(x.id, "C1"): c1(x) for x in instances}
+        async def c1s(x):
+            # Sequential (ADR-009): K = 1 per call, conditioned on the valid ideas so far.
+            records, previous = [], []
+            for slot in range(K):
+                sample_idx = SEQUENTIAL_SAMPLE_BASE + slot
+                r = (await self.generate_call(client, x, "C1s", 1, sample_idx, previous))[0]
+                records.append(r.model_copy(update={"slot": slot}))
+                if r.valid:
+                    previous = [*previous, r.idea]
+            return records
+
+        makers = {"C0": c0, "C1": c1, "C1s": c1s}
+        jobs = {(x.id, c): makers[c](x) for c in self.conditions for x in instances}
         results = await asyncio.gather(*jobs.values())
         self.slots = dict(zip(jobs, results, strict=True))
         write_jsonl(
@@ -180,9 +214,37 @@ class Baseline(Smoke):
     # --- judges ---------------------------------------------------------------
 
     async def judge_call(self, client, judge: str, prompt, mode, messages, parse, ids: dict):
-        """One judge call with one retry on a broken output contract."""
+        """One judge call with one retry on a broken output contract.
+
+        A request the provider's content filter refuses twice is a missing value, not a crash
+        (ADR-006, amendment 6): it is logged and counted, never reworded.
+        """
         for attempt in (0, 1):
-            c = await self.call(judge, mode, messages, attempt=attempt, client=client, extra=ids)
+            try:
+                c = await self.call(
+                    judge, mode, messages, attempt=attempt, client=client, extra=ids
+                )
+            except ContentFilteredError:
+                self.content_filtered.append({"judge": judge, **ids})
+                self.judge_rows.append(
+                    {
+                        "run_id": self.run_id,
+                        "card": None,
+                        "judge": judge,
+                        "model": mode["model"],
+                        "prompt_hash": prompt.hash,
+                        "seed": None,
+                        "attempt": attempt,
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                        "call_key": None,
+                        "raw": None,
+                        "parsed": None,
+                        "parse_error": "content_filter",
+                        **ids,
+                    }
+                )
+                return None
             try:
                 value, error = parse(c.content), None
             except JudgeOutputError as e:
@@ -223,14 +285,15 @@ class Baseline(Smoke):
             reference = render_card(self.anchors[x.id])
         else:
             reference = x.gold
+        quality_prompt = self.prompt("quality")
         winners = []
         for idea_first in (True, False):
-            msgs = quality_messages(idea, reference, idea_first=idea_first)
+            msgs = quality_messages(idea, reference, idea_first=idea_first, prompt=quality_prompt)
             winners.append(
                 await self.judge_call(
                     client,
                     f"quality-{name}",
-                    QUALITY_V1,
+                    quality_prompt,
                     mode,
                     msgs,
                     parse_winner,
@@ -275,7 +338,7 @@ class Baseline(Smoke):
         wonder = self.judge_client("wonder")
         jobs = []
         for x in instances:
-            for cond in CONDITIONS:
+            for cond in self.conditions:
                 valid = [(r.slot, r.idea) for r in self.slots[(x.id, cond)] if r.valid]
                 for slot, idea in valid:
                     jobs.append(self.quality(spark, "spark", x, cond, slot, idea))
@@ -311,11 +374,18 @@ class Baseline(Smoke):
         """Which q drives CU: "anchor" (ADR-008) or "spark" (against the gold, runs before it)."""
         return {"anchor": "anchor", "gold": "spark"}[self.cfg["q_reference"]]
 
+    def comparisons(self) -> list[tuple[str, str]]:
+        """Paired comparisons to report: every condition against C0, and C1s against C1."""
+        pairs = [(c, "C0") for c in self.conditions if c != "C0" and "C0" in self.conditions]
+        if {"C1", "C1s"} <= set(self.conditions):
+            pairs.append(("C1s", "C1"))
+        return pairs
+
     def q_report(self, name: str) -> dict[str, Any]:
         """q per condition (invalid ideas count as 0): CI over instances, ties, position."""
         out: dict[str, Any] = {}
         per_instance: dict[str, dict[str, float]] = {}
-        for cond in CONDITIONS:
+        for cond in self.conditions:
             means: dict[str, float] = {}
             judged: list[float] = []
             verdicts: list[tuple[str, str]] = []
@@ -342,37 +412,38 @@ class Baseline(Smoke):
                 "position": position_consistency(verdicts) if verdicts else None,
                 "by_instance": means,
             }
-        common = set(per_instance["C0"]) & set(per_instance["C1"])
-        if common:
-            out["q C1-C0"] = ci_dict(
-                paired_delta_ci(
-                    {i: per_instance["C1"][i] for i in common},
-                    {i: per_instance["C0"][i] for i in common},
+        for a, b in self.comparisons():
+            common = set(per_instance[a]) & set(per_instance[b])
+            if common:
+                out[f"q {a}-{b}"] = ci_dict(
+                    paired_delta_ci(
+                        {i: per_instance[a][i] for i in common},
+                        {i: per_instance[b][i] for i in common},
+                    )
                 )
-            )
         verdicts = list(self.verdicts[name].values())
         out["position_all"] = position_consistency(verdicts) if verdicts else None
         return out
 
     def length_bias(self, name: str, instances: list[Instance]) -> dict[str, Any]:
-        """Length of the idea the quality judge sees vs its q, and vs the reference's length."""
+        """Length in words (ADR-009) of the idea the judge reads vs its q, and vs the reference."""
         ideas = {(k[0], k[1], r.slot): r.idea for k, recs in self.slots.items() for r in recs}
         reference = {
-            x.id: len(render_card(self.anchors[x.id]) if name == "anchor" else x.gold)
+            x.id: judged_words(self.anchors[x.id]) if name == "anchor" else len(x.gold.split())
             for x in instances
             if name != "anchor" or self.anchors.get(x.id) is not None
         }
         keys = [k for k, v in self.q[name].items() if v is not None]
-        lengths = [len(render_card(ideas[k])) for k in keys]
-        rel = [len(render_card(ideas[k])) - reference[k[0]] for k in keys]
+        lengths = [judged_words(ideas[k]) for k in keys]
+        rel = [judged_words(ideas[k]) - reference[k[0]] for k in keys]
         qs = [self.q[name][k] for k in keys]
         return {
             "n": len(keys),
             "pearson_len_q": pearson(lengths, qs),
             "spearman_len_q": spearman(lengths, qs),
             "pearson_len_minus_reference_q": pearson(rel, qs),
-            "mean_idea_chars": sum(lengths) / len(lengths) if lengths else None,
-            "mean_reference_chars": sum(reference.values()) / len(reference) if reference else None,
+            "mean_idea_words": sum(lengths) / len(lengths) if lengths else None,
+            "mean_reference_words": sum(reference.values()) / len(reference) if reference else None,
         }
 
     def set_metrics(self, key: SetKey) -> dict[str, Any]:
@@ -422,12 +493,14 @@ class Baseline(Smoke):
     def metrics(self, instances: list[Instance]) -> dict[str, Any]:
         rows = [self.set_metrics(k) for k in sorted(self.slots)]
         complete = [r for r in rows if r["complete"]]
-        ok_ids = {r["instance"] for r in complete if r["condition"] == "C0"} & {
-            r["instance"] for r in complete if r["condition"] == "C1"
+        ok_ids = set.intersection(
+            *({r["instance"] for r in complete if r["condition"] == c} for c in self.conditions)
+        )
+        by = {
+            c: {r["instance"]: r for r in complete if r["condition"] == c} for c in self.conditions
         }
-        by = {c: {r["instance"]: r for r in complete if r["condition"] == c} for c in CONDITIONS}
         table = {}
-        for cond in CONDITIONS:
+        for cond in self.conditions:
             cell = {"n_sets": len(by[cond]), "invalid_ideas": 0, "ideas": 0}
             for r in rows:
                 if r["condition"] == cond:
@@ -442,13 +515,15 @@ class Baseline(Smoke):
             cell["q_wonder_ideas_mean"] = sum(wonder_q) / len(wonder_q) if wonder_q else None
             table[cond] = cell
         deltas = {}
-        for m in ("cu", "q", "q_gold", "d", "d_embed"):
-            a = {i: by["C1"][i][m] for i in ok_ids if by["C1"][i].get(m) is not None}
-            b = {i: by["C0"][i][m] for i in ok_ids if by["C0"][i].get(m) is not None}
+        for m, (x, y) in itertools.product(
+            ("cu", "q", "q_gold", "d", "d_embed"), self.comparisons()
+        ):
+            a = {i: by[x][i][m] for i in ok_ids if by[x][i].get(m) is not None}
+            b = {i: by[y][i][m] for i in ok_ids if by[y][i].get(m) is not None}
             common = set(a) & set(b)
             if common:
                 ci = paired_delta_ci({i: a[i] for i in common}, {i: b[i] for i in common})
-                deltas[f"{m} C1-C0"] = ci_dict(ci)
+                deltas[f"{m} {x}-{y}"] = ci_dict(ci)
         return {
             "sets": rows,
             "paired_instances": len(ok_ids),
@@ -495,7 +570,7 @@ class Baseline(Smoke):
     def examples(self, instances: list[Instance]) -> dict[str, list[dict[str, Any]]]:
         """First two config instances (sorted IDs), first valid slot: no picking by result."""
         out = {}
-        for cond in CONDITIONS:
+        for cond in self.conditions:
             rows = []
             for x in instances[:2]:
                 r = next((r for r in self.slots[(x.id, cond)] if r.valid), None)

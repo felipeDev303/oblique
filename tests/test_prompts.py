@@ -4,13 +4,17 @@ from oblique.bench import Instance
 from oblique.generate.labels import METHOD_PARADIGMS, OPPORTUNITY_PATTERNS, strip_leading_label
 from oblique.generate.schema import IdeaCard
 from oblique.prompts import (
+    IDEATION_V3,
     PROMPTS,
     JudgeOutputError,
+    Prompt,
     distance,
     distance_messages,
+    field_words,
     grounding,
     grounding_messages,
     ideation_messages,
+    judged_words,
     parse_grounding,
     parse_similarity,
     parse_winner,
@@ -39,10 +43,12 @@ IDEA = IdeaCard(
     inspiration="Paper 1's X and Paper 2's Y.",
 )
 
-# Changing a template changes its hash: bump the version (ideation-v3, ...) and update here.
+# Changing a template changes its hash: bump the version (ideation-v4, ...) and update here.
 FROZEN = {
     "ideation-v2": "cbadaa8eb5837db2",
+    "ideation-v3": "ac302619d59086d2",
     "quality-v1": "a6faec078dabf17b",
+    "quality-v2": "6bdf589b7106e1a4",
     "distance-v1": "28a29c13b725e007",
     "grounding-v1": "b8fdc3ca41e79408",
 }
@@ -83,6 +89,61 @@ def test_ideation_calls_share_the_prefix():
     assert a[0] == b[0]
     prefix = a[1]["content"].split("</papers>")[0]
     assert b[1]["content"].startswith(prefix)
+
+
+def test_v3_replaces_the_sentence_rule_with_word_limits():
+    system = IDEATION_V3.system
+    assert "one to three sentences" not in system
+    limits = ('"problem_gap" 40', '"core_claim" 40', '"method" 60', '"inspiration" 80')
+    assert all(limit in system for limit in limits)
+    v2 = PROMPTS["ideation-v2"].system
+    assert "one to three sentences" in v2 and "Word limits" not in v2
+
+
+def test_first_sequential_idea_reads_like_any_k1_call():
+    assert ideation_messages(PAPERS, 1, previous=()) == ideation_messages(PAPERS, 1)
+
+
+def test_sequential_text_is_fixed_and_carries_the_ideas_as_generated():
+    user = ideation_messages(PAPERS, 1, previous=[IDEA, IDEA])[1]["content"]
+    assert user.startswith("<papers>")
+    assert "Ideas already proposed from these papers:" in user
+    assert "Idea 1:\nproblem_gap: [Evidence Gap] Nobody has measured X.\ncore_claim: X" in user
+    assert "Idea 2:" in user and "inspiration: Paper 1's X and Paper 2's Y." in user
+    assert user.endswith(
+        "The new idea must be distinct from these.\n\nPropose 1 distinct research idea based on "
+        'these papers. The "ideas" array must contain exactly 1 object.'
+    )
+
+
+def test_sequential_generation_needs_k1_and_a_slot():
+    with pytest.raises(ValueError):
+        ideation_messages(PAPERS, 3, previous=[IDEA])
+    with pytest.raises(ValueError):
+        ideation_messages(PAPERS, 1, PROMPTS["ideation-v2"], previous=[IDEA])
+
+
+def test_extra_blocks_enter_the_hash():
+    a = Prompt("x-v1", "s", "u", extra=(("block", "one"),))
+    b = Prompt("x-v1", "s", "u", extra=(("block", "two"),))
+    assert a.hash != b.hash != Prompt("x-v1", "s", "u").hash
+
+
+def test_quality_v2_adds_only_the_length_line():
+    v1, v2 = PROMPTS["quality-v1"], PROMPTS["quality-v2"]
+    line = " Length and amount of detail are not merits in themselves."
+    assert line in v2.system and line not in v1.system
+    assert v2.system.replace(line, "") == v1.system and v2.user == v1.user
+
+
+def test_length_counts_what_the_quality_judge_reads():
+    assert field_words(IDEA) == {
+        "problem_gap": 4,  # the label does not count
+        "core_claim": 3,
+        "method": 4,
+        "inspiration": 7,
+    }
+    assert judged_words(IDEA) == 4 + 3 + 4
 
 
 def test_ideation_rejects_k_below_one():

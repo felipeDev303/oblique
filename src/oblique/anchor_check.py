@@ -19,9 +19,8 @@ from pathlib import Path
 
 import yaml
 
-from oblique.baseline import CONDITIONS, Baseline, K
+from oblique.baseline import Baseline, K
 from oblique.generate.records import read_generations
-from oblique.prompts import IDEATION_V2
 from oblique.smoke import load_env, write_jsonl_dicts
 
 
@@ -31,10 +30,10 @@ class AnchorCheck(Baseline):
         records = read_generations(self.cfg["source_generations"])
         grouped = defaultdict(list)
         for r in records:
-            if r.prompt_hash != IDEATION_V2.hash:
+            if r.prompt_hash != self.prompt("ideation").hash:
                 raise SystemExit(f"{r.instance}: idea from another prompt ({r.prompt_hash})")
             grouped[(r.instance, r.condition)].append(r)
-        wanted = {(x.id, c) for x in instances for c in CONDITIONS}
+        wanted = {(x.id, c) for x in instances for c in self.conditions}
         if set(grouped) != wanted or any(len(v) != K for v in grouped.values()):
             raise SystemExit("source generations do not match the configured instances")
         self.slots = {k: sorted(v, key=lambda r: r.slot) for k, v in grouped.items()}

@@ -1,0 +1,330 @@
+"""The ADR-009 validation run against a fake transport and embedder: no network."""
+
+import asyncio
+import json
+import re
+from types import SimpleNamespace
+
+import httpx
+import numpy as np
+import openai
+import pytest
+import yaml
+from tenacity import wait_none
+
+from oblique import baseline, length_check
+from oblique.bench import Instance
+from oblique.generate.validate import InvalidReason
+from oblique.length_check import distribution
+from oblique.llm import ContentFilteredError
+from oblique.prompts import IDEATION_V3, PROMPTS
+
+INSTANCES = [
+    Instance(
+        id=f"i-{1000 + j}",
+        pair_id=f"p{j}",
+        arxiv_id="2510.00001",
+        domain=f"D{j % 16:02d}",
+        paper1_title="One",
+        paper2_title="Two",
+        abstract_1=f"a1 {j}",
+        abstract_2="a2",
+        gold="Gold insight.",
+    )
+    for j in range(50)
+]
+
+
+class _Raw:
+    def __init__(self, data):
+        self._data = data
+
+    def model_dump(self):
+        return self._data
+
+
+class FakeAPI:
+    """K = 1 ideas have long claims, K = 3 ideas short ones, so C1 is shorter than the anchor.
+    The judge prefers the longer idea; on a tie, position A."""
+
+    def __init__(self):
+        self.chat = self.completions = self
+        self.models = SimpleNamespace(list=self._models)
+        self.requests = []
+
+    async def _models(self):
+        return SimpleNamespace(data=[SimpleNamespace(id="muse-spark-1.3-contributor")])
+
+    def idea(self, words: int, slot: int) -> dict:
+        n = f"{len(self.requests)}-{slot}"
+        return {
+            "problem_gap": f"[Evidence Gap] gap {n}",
+            "core_claim": " ".join(["word"] * words) + f" {n}",
+            "method": "[Empirical Mapping] method",
+            "inspiration": "i",
+        }
+
+    async def create(self, **request):
+        self.requests.append(request)
+        system, user = (m["content"] for m in request["messages"])
+        if "research scientist" in system:
+            k = 3 if "exactly 3 objects" in user else 1
+            content = json.dumps({"ideas": [self.idea(5 if k == 3 else 20, s) for s in range(k)]})
+        elif "expert reviewer" in system:
+            a, b = (len(s.split()) for s in re.findall(r"Claim: (.*)", user))
+            content = json.dumps({"winner": "A" if a >= b else "B"})
+        else:
+            content = '{"score": 4}'
+        return _Raw(
+            {
+                "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+            }
+        )
+
+
+class FakeEmbedder:
+    def embed(self, ideas):
+        return [
+            {f: np.array([1.0, float(i % 5)]) for f in ("problem_gap", "core_claim", "method")}
+            for i in range(len(ideas))
+        ]
+
+
+@pytest.fixture
+def run(tmp_path, monkeypatch):
+    cfg = yaml.safe_load(open("configs/R-20261030-05.yaml", encoding="utf-8"))
+    cfg["cache"] = str(tmp_path / "cache.db")
+    cfg["instances"] = baseline.pick_baseline(INSTANCES)
+    cfg["n_boot"] = 50
+    monkeypatch.setattr(baseline, "load_instances", lambda split: INSTANCES)
+    api = FakeAPI()
+    check = length_check.LengthCheck(
+        cfg, out=tmp_path / "run", transport=api, wait=wait_none(), embedder=FakeEmbedder()
+    )
+    asyncio.run(check.run())
+    return api, check, json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))
+
+
+def generations(api):
+    return [r for r in api.requests if "research scientist" in r["messages"][0]["content"]]
+
+
+def test_run_generates_every_condition_with_v3(run):
+    api, check, result = run
+    gens = generations(api)
+    # 20 anchors + 60 C0 + 20 C1 + 60 C1s
+    assert len(gens) == 160
+    assert all(r["messages"][0]["content"] == IDEATION_V3.system for r in gens)
+    assert all("seed" not in r for r in gens)
+    records = [r for recs in check.slots.values() for r in recs]
+    assert len(records) == 180 and {r.condition for r in records} == {"C0", "C1", "C1s"}
+    assert {r.prompt_hash for r in records} == {IDEATION_V3.hash}
+    assert result["anchors_valid"] == 20
+    assert result["invalid_ideas"] == {"C0": 0, "C1": 0, "C1s": 0}
+
+
+def test_sequential_ideas_are_conditioned_on_the_earlier_ones(run):
+    api, check, _ = run
+    users = [r["messages"][1]["content"] for r in generations(api)]
+    assert sum("Idea 1:" in u and "Idea 2:" not in u for u in users) == 20  # second idea of a set
+    assert sum("Idea 2:" in u for u in users) == 20  # third idea of a set
+    for x in check.cfg["instances"]:
+        records = check.slots[(x, "C1s")]
+        third = next(u for u in users if "Idea 2:" in u and records[0].idea.core_claim in u)
+        assert records[1].idea.core_claim in third
+        assert [r.slot for r in records] == [0, 1, 2]
+
+
+def test_a_sequence_never_shares_a_draw_with_c0_or_the_anchor(run):
+    _, check, _ = run
+    # The first idea of a sequence reads like a C0 call, so only sample_idx keeps them apart.
+    claims = {
+        c: {r.idea.core_claim for (_, cc), rs in check.slots.items() if cc == c for r in rs}
+        for c in check.conditions
+    }
+    assert not claims["C0"] & claims["C1s"]
+    assert not {a.core_claim for a in check.anchors.values()} & (claims["C0"] | claims["C1s"])
+
+
+def test_judges_use_quality_v2_and_grounding(run):
+    api, _, result = run
+    quality = [r for r in api.requests if "expert reviewer" in r["messages"][0]["content"]]
+    assert len(quality) == 360
+    assert all(r["messages"][0]["content"] == PROMPTS["quality-v2"].system for r in quality)
+    assert all(r["reasoning_effort"] == "minimal" and r["temperature"] == 0 for r in quality)
+    assert result["grounding"]["C1s"]["mean"] == 0.75
+    assert "C1s-C0" in result["grounding"] and "C1s-C1" in result["grounding"]
+
+
+def test_report_has_length_q_and_controlled_rates(run):
+    _, _, result = run
+    words = result["length"]
+    assert words["C1"]["words"]["mean"] < words["C0"]["words"]["mean"]
+    assert words["ANCHOR"]["words"]["n"] == 20
+    assert words["C0"]["within_caps"]["core_claim"] == 1.0
+
+    q = result["q_anchor"]
+    assert set(q) >= {"C0", "C1", "C1s", "q C1-C0", "q C1s-C0", "q C1s-C1", "position_all"}
+    assert q["C1"]["q"]["mean"] == 0.0  # always shorter than the anchor
+    assert result["length_vs_q"]["fallback_threshold"] == 0.3
+    assert result["length_vs_q"]["all"]["n"] == 180
+    assert isinstance(result["length_vs_q"]["fallback_triggered"], bool)
+
+    controlled = result["controlled_for_length"]
+    assert controlled["judgments"] == 360
+    assert set(controlled["rates"]) == {"C0", "C1", "C1s"}
+    assert set(controlled["differences"]) == {"C1-C0", "C1s-C0", "C1s-C1"}
+    assert result["embedding_distance"]["C1s"]["n"] == 20
+
+
+def _status_400(message: str) -> openai.BadRequestError:
+    req = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
+    return openai.BadRequestError(message, response=httpx.Response(400, request=req), body=None)
+
+
+FILTERED = "The response was filtered due to the prompt triggering our content management policy."
+
+
+class FilteredAPI(FakeAPI):
+    """Refuses, `times` times each, the requests on one grounding prompt (`grounding`) and on the
+    first `gens` K = 1 generation prompts; `message` is the error text."""
+
+    def __init__(self, message: str = FILTERED, *, times: int = 99, grounding=True, gens=0):
+        super().__init__()
+        self.message = message
+        self.times = times
+        self.grounding = grounding
+        self.gens = gens
+        self.target = None
+        self.refused = 0
+        self.attempts = {}
+
+    async def create(self, **request):
+        system, user = (m["content"] for m in request["messages"])
+        if self.grounding and "You assess how much" in system:
+            self.target = self.target or user
+            if user == self.target and self.refused < self.times:
+                self.refused += 1
+                raise _status_400(self.message)
+        if "research scientist" in system and "exactly 1 object" in user and self.gens:
+            seen = self.attempts.setdefault(user, 0)
+            if len(self.attempts) <= self.gens and seen < self.times:
+                self.attempts[user] += 1
+                raise _status_400(self.message)
+        return await super().create(**request)
+
+
+def _check(tmp_path, monkeypatch, api):
+    cfg = yaml.safe_load(open("configs/R-20261030-05.yaml", encoding="utf-8"))
+    cfg["cache"] = str(tmp_path / "cache.db")
+    cfg["instances"] = baseline.pick_baseline(INSTANCES)
+    cfg["n_boot"] = 20
+    monkeypatch.setattr(baseline, "load_instances", lambda split: INSTANCES)
+    return length_check.LengthCheck(
+        cfg, out=tmp_path / "run", transport=api, wait=wait_none(), embedder=FakeEmbedder()
+    )
+
+
+def test_a_content_filtered_judgment_is_counted_as_missing(tmp_path, monkeypatch):
+    api = FilteredAPI()
+    check = _check(tmp_path, monkeypatch, api)
+    asyncio.run(check.run())
+    assert api.refused == 2  # one identical retry, then missing
+    result = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))
+    assert len(result["content_filtered"]) == 1
+    assert result["content_filtered"][0]["judge"] == "grounding-spark"
+    assert sum(v is None for v in check.ground.values()) == 1
+    rows = (tmp_path / "run" / "judgments.jsonl").read_text("utf-8").splitlines()
+    assert sum('"content_filter"' in r for r in rows) == 1
+
+
+def test_a_filter_that_passes_on_the_identical_retry_counts_as_normal(tmp_path, monkeypatch):
+    api = FilteredAPI(times=1)
+    check = _check(tmp_path, monkeypatch, api)
+    asyncio.run(check.run())
+    assert api.refused == 1 and check.content_filtered == []
+    assert all(v is not None for v in check.ground.values())
+
+
+def test_a_filtered_generation_is_invalid_and_the_run_goes_on(tmp_path, monkeypatch):
+    check = _check(tmp_path, monkeypatch, FilteredAPI(grounding=False, gens=1))
+    asyncio.run(check.run())
+    result = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))
+    assert [f["judge"] for f in result["content_filtered"]] == ["generation"]
+    invalid = [r for recs in check.slots.values() for r in recs if not r.valid]
+    assert len(invalid) == 1 and invalid[0].invalid_reason == InvalidReason.content_filtered
+    assert invalid[0].instance == result["content_filtered"][0]["instance"]
+    # q = 0 for the invalid idea, not a missing value: its instance stays in the mean.
+    by_instance = check.q_report("anchor")[invalid[0].condition]["by_instance"]
+    assert invalid[0].instance in by_instance
+
+
+def test_a_filtered_anchor_leaves_its_instance_without_q(tmp_path, monkeypatch):
+    check = _check(tmp_path, monkeypatch, FilteredAPI(grounding=False))
+
+    async def scenario():
+        client = check.new_client("meta", 4)
+        original = client.complete
+
+        async def complete(model, messages, **kw):
+            if kw.get("sample_idx") == baseline.ANCHOR_SAMPLE_IDX:
+                raise ContentFilteredError("key", FILTERED)
+            return await original(model, messages, **kw)
+
+        client.complete = complete
+        await check.generate_anchors(client, INSTANCES[:1])
+
+    check.out.mkdir(parents=True, exist_ok=True)
+    asyncio.run(scenario())
+    assert check.anchors == {INSTANCES[0].id: None}
+    assert check.content_filtered[0]["condition"] == "ANCHOR"
+
+
+def test_a_filtered_sequence_idea_leaves_the_rest_running(tmp_path, monkeypatch):
+    check = _check(tmp_path, monkeypatch, FilteredAPI(grounding=False))
+
+    async def scenario():
+        client = check.new_client("meta", 4)
+        original = client.complete
+
+        async def complete(model, messages, **kw):
+            if kw.get("sample_idx") == baseline.SEQUENTIAL_SAMPLE_BASE + 1:
+                raise ContentFilteredError("key", FILTERED)
+            return await original(model, messages, **kw)
+
+        client.complete = complete
+        records, previous = [], []
+        for slot in range(3):
+            sample_idx = baseline.SEQUENTIAL_SAMPLE_BASE + slot
+            r = (await check.generate_call(client, INSTANCES[0], "C1s", 1, sample_idx, previous))[0]
+            records.append(r)
+            if r.valid:
+                previous = [*previous, r.idea]
+        return records, previous
+
+    records, previous = asyncio.run(scenario())
+    assert [r.valid for r in records] == [True, False, True]
+    assert records[1].invalid_reason == InvalidReason.content_filtered
+    assert len(previous) == 2
+
+
+def test_any_other_400_still_stops_the_run(tmp_path, monkeypatch):
+    check = _check(tmp_path, monkeypatch, FilteredAPI("invalid parameter"))
+    with pytest.raises(openai.BadRequestError):
+        asyncio.run(check.run())
+
+
+def test_distribution():
+    d = distribution([1, 2, 3, 4, 5])
+    assert d == {
+        "n": 5,
+        "mean": 3.0,
+        "sd": d["sd"],
+        "min": 1,
+        "p25": 2.0,
+        "median": 3.0,
+        "p75": 4.0,
+        "max": 5,
+    }
+    assert d["sd"] == pytest.approx(1.5811, abs=1e-3)

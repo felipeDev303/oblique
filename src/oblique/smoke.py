@@ -225,7 +225,7 @@ class Smoke:
 
     async def generate(self, instance) -> list[Completion]:
         k, gen = self.cfg["k"], self.cfg["generator"]
-        messages = ideation_messages(instance, k)
+        messages = ideation_messages(instance, k, IDEATION_V2)
         # JSON mode first; plain text if the API rejects it.
         g1, params = await self.first_accepted(
             "gen contributor seed=0",
@@ -280,12 +280,12 @@ class Smoke:
         for name in ("spark", "wonder"):
             mode = self.cfg["judges"][name]
             efforts = mode.get("reasoning_effort", [None])
-            msgs = quality_messages(idea, instance.gold, idea_first=True)
+            msgs = quality_messages(idea, instance.gold, idea_first=True, prompt=QUALITY_V1)
             c, params = await self.first_accepted(
                 f"quality {name} idea_first", mode, msgs, "reasoning_effort", efforts
             )
             w1 = self.judged(f"quality-{name}", QUALITY_V1, c, parse_winner, idea_first=True)
-            msgs = quality_messages(idea, instance.gold, idea_first=False)
+            msgs = quality_messages(idea, instance.gold, idea_first=False, prompt=QUALITY_V1)
             c = await self.call(f"quality {name} gold_first", mode, msgs, params)
             w2 = self.judged(f"quality-{name}", QUALITY_V1, c, parse_winner, idea_first=False)
             self.notes[f"quality {name}"] = {

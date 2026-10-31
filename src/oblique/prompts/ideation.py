@@ -1,4 +1,4 @@
-"""ideation-v2: K distinct research ideas from two source papers, JSON only.
+"""ideation-v3: K distinct research ideas from two source papers, JSON only.
 
 Each idea has the four fields of `IdeaCard`. `problem_gap` opens with an
 opportunity-pattern label and `method` with a method-paradigm label, from the
@@ -7,12 +7,20 @@ for this project. The request is always "Propose {k} distinct research
 idea(s)", the same phrase in every condition. Output: {"ideas": [...]}.
 The papers come first so every call on an instance shares the same prefix.
 
-v1 (never sent to the API) asked for "{k} research ideas" and listed the
+v3 (ADR-009) caps the words of each field and adds the fixed text that conditions
+a sequential idea on the earlier ones; the first idea of a sequence reads exactly
+like any other K = 1 call. Exceeding a cap does not make an idea invalid (ADR-006).
+
+v2 asked for one to three sentences per field and stays for the runs before
+ADR-009. v1 (never sent to the API) asked for "{k} research ideas" and listed the
 labels without definitions.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from oblique.generate.schema import IdeaCard
 from oblique.prompts.base import Papers, Prompt, render_papers
 
 OPPORTUNITY_DEFINITIONS = {
@@ -67,12 +75,68 @@ Propose {k} distinct research {noun} based on these papers. The "ideas" array mu
 
 IDEATION_V2 = Prompt("ideation-v2", SYSTEM, USER)
 
+WORD_LIMITS = {"problem_gap": 40, "core_claim": 40, "method": 60, "inspiration": 80}
 
-def ideation_messages(papers: Papers, k: int, prompt: Prompt = IDEATION_V2) -> list[dict[str, str]]:
+_V2_LENGTH_LINE = "Keep each field to one to three sentences."
+_V3_LENGTH_LINE = (
+    "Word limits per field, not counting the label: "
+    + ", ".join(f'"{field}" {limit}' for field, limit in WORD_LIMITS.items())
+    + ". Stay within them."
+)
+
+USER_V3 = """{papers}
+
+{previous}Propose {k} distinct research {noun} based on these papers. The "ideas" array must contain exactly {k} {objects}."""
+
+# The fixed text of sequential generation (ADR-009), the same in every condition.
+PREVIOUS_BLOCK = """Ideas already proposed from these papers:
+
+{ideas}
+
+The new idea must be distinct from these.
+
+"""
+
+PREVIOUS_IDEA = """Idea {number}:
+problem_gap: {problem_gap}
+core_claim: {core_claim}
+method: {method}
+inspiration: {inspiration}"""
+
+IDEATION_V3 = Prompt(
+    "ideation-v3",
+    SYSTEM.replace(_V2_LENGTH_LINE, _V3_LENGTH_LINE),
+    USER_V3,
+    extra=(("previous_block", PREVIOUS_BLOCK), ("previous_idea", PREVIOUS_IDEA)),
+)
+
+
+def render_previous(previous: Sequence[IdeaCard]) -> str:
+    """The earlier ideas of a sequential set, exactly as generated; empty for the first idea."""
+    if not previous:
+        return ""
+    ideas = "\n\n".join(
+        PREVIOUS_IDEA.format(number=i, **idea.model_dump()) for i, idea in enumerate(previous, 1)
+    )
+    return PREVIOUS_BLOCK.format(ideas=ideas)
+
+
+def ideation_messages(
+    papers: Papers,
+    k: int,
+    prompt: Prompt = IDEATION_V3,
+    previous: Sequence[IdeaCard] = (),
+) -> list[dict[str, str]]:
+    """K ideas in one call, or with `previous` one more idea of a sequential set."""
     if k < 1:
         raise ValueError("k must be >= 1")
+    if previous and (k != 1 or "{previous}" not in prompt.user):
+        raise ValueError(
+            f"sequential generation needs k = 1 and a {{previous}} slot in {prompt.id}"
+        )
     return prompt.messages(
         papers=render_papers(papers),
+        previous=render_previous(previous),
         k=str(k),
         noun="idea" if k == 1 else "ideas",
         objects="object" if k == 1 else "objects",
