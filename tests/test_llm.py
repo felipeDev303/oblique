@@ -168,6 +168,45 @@ def test_adaptive_limit_halves_on_a_429_and_stays_down(cache):
     assert transport.max_active <= 4
 
 
+def test_adaptive_limit_rises_to_its_ceiling_and_drops_on_a_429():
+    limiter = ConcurrencyLimiter(8, adaptive=True, max_limit=12, raise_after=3)
+    assert [limiter.on_success() for _ in range(3)] == [False, False, True]
+    assert limiter.limit == 9
+    for _ in range(50):
+        limiter.on_success()
+    assert limiter.limit == 12
+    limiter.on_success()
+    assert limiter.limit == 12
+    assert limiter.on_rate_limited(limiter.epoch) is True and limiter.limit == 6
+    # The count starts over after a 429.
+    limiter.on_success(), limiter.on_success()
+    limiter.on_rate_limited(-1)
+    assert limiter.successes == 0
+    assert limiter.limit == 6
+
+
+def test_limit_without_a_ceiling_never_rises():
+    limiter = ConcurrencyLimiter(8, adaptive=True)
+    for _ in range(200):
+        assert limiter.on_success() is False
+    assert limiter.limit == 8
+    with pytest.raises(ValueError):
+        ConcurrencyLimiter(8, adaptive=True, max_limit=4)
+
+
+def test_client_climbs_to_the_ceiling_with_successes(cache):
+    transport = FakeTransport(delay=0.001)
+    llm = _client(cache, transport, concurrency=2, adaptive=True, max_concurrency=4)
+    llm.limiter.raise_after = 5
+
+    async def run():
+        await asyncio.gather(*(llm.complete("m", MSGS, sample_idx=i) for i in range(40)))
+
+    asyncio.run(run())
+    assert llm.limiter.limit == 4
+    assert transport.max_active <= 4 and transport.max_active > 2
+
+
 def test_one_burst_of_429s_lowers_the_limit_once():
     limiter = ConcurrencyLimiter(8, adaptive=True)
     started = limiter.epoch

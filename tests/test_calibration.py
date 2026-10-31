@@ -6,7 +6,7 @@ from oblique.metrics.calibration import (
     agreement,
     cohen_kappa,
     controlled_win_rates,
-    logistic_fit,
+    fit_condition_logit,
     pearson,
     position_consistency,
     ranks,
@@ -60,18 +60,37 @@ def test_embedding_distance_is_clipped_one_minus_cosine():
     assert pair_distance(a, b) == pytest.approx(2 / 3)
 
 
-def test_logistic_fit_recovers_known_coefficients():
+def test_condition_logit_recovers_known_coefficients():
     rng = np.random.default_rng(1)
-    x = rng.normal(size=20_000)
-    X = np.column_stack([np.ones_like(x), x])
-    y = (rng.random(len(x)) < 1 / (1 + np.exp(-(0.5 + 1.2 * x)))).astype(float)
-    assert logistic_fit(X, y) == pytest.approx([0.5, 1.2], abs=0.06)
+    n = 30_000
+    condition = rng.integers(0, 3, n)
+    x = rng.normal(size=n)
+    truth = np.array([0.5, -1.0, 0.0])
+    y = (rng.random(n) < 1 / (1 + np.exp(-(truth[condition] + 1.2 * x)))).astype(float)
+    alpha, beta = fit_condition_logit(condition, x, y, 3)
+    assert alpha == pytest.approx(truth, abs=0.06)
+    assert beta == pytest.approx(1.2, abs=0.06)
 
 
-def test_logistic_fit_stays_finite_under_separation():
-    X = np.column_stack([np.ones(6), [0, 0, 0, 1, 1, 1]])
-    beta = logistic_fit(X, np.array([0.0, 0, 0, 1, 1, 1]))
-    assert np.isfinite(beta).all() and beta[1] > 3
+def test_condition_logit_matches_a_plain_newton_fit():
+    rng = np.random.default_rng(2)
+    n = 2_000
+    condition = rng.integers(0, 4, n)
+    x = rng.normal(size=n)
+    y = (rng.random(n) < 0.5).astype(float)
+    X = np.column_stack([*(condition == c for c in range(4)), x]).astype(float)
+    b = np.zeros(5)
+    for _ in range(30):
+        p = 1 / (1 + np.exp(-X @ b))
+        b = b + np.linalg.solve((X * (p * (1 - p))[:, None]).T @ X, X.T @ (y - p))
+    alpha, beta = fit_condition_logit(condition, x, y, 4)
+    assert [*alpha, beta] == pytest.approx(b.tolist(), abs=1e-5)
+
+
+def test_condition_logit_stays_finite_under_separation():
+    condition = np.array([0, 0, 0, 1, 1, 1])
+    alpha, beta = fit_condition_logit(condition, np.zeros(6), np.array([0.0, 0, 0, 1, 1, 1]), 2)
+    assert np.isfinite(alpha).all() and np.isfinite(beta) and alpha[1] - alpha[0] > 3
 
 
 def _rows(rate_by_condition, delta=lambda j: 0):
