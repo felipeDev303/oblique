@@ -37,14 +37,14 @@ class Prompt:
     id: str
     system: str
     user: str  # str.format template
+    extra: tuple[tuple[str, str], ...] = ()  # fixed text blocks rendered into the user message
 
     @property
     def hash(self) -> str:
-        blob = json.dumps(
-            {"id": self.id, "system": self.system, "user": self.user},
-            sort_keys=True,
-            ensure_ascii=False,
-        )
+        parts: dict[str, Any] = {"id": self.id, "system": self.system, "user": self.user}
+        if self.extra:
+            parts["extra"] = self.extra
+        blob = json.dumps(parts, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
     def messages(self, **fields: str) -> list[dict[str, str]]:
