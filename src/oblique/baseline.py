@@ -33,13 +33,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-import openai
 import yaml
 
 from oblique.bench import Instance, load_instances, pick_baseline
 from oblique.generate.records import GenerationRecord, records_from_set, write_jsonl
 from oblique.generate.schema import IdeaCard
-from oblique.generate.validate import parse_set
+from oblique.generate.validate import filtered_set, parse_set
+from oblique.llm import ContentFilteredError, Usage
 from oblique.metrics import bootstrap_mean_ci, creative_utility, paired_delta_ci
 from oblique.metrics.calibration import agreement, pearson, position_consistency, spearman
 from oblique.prompts import (
@@ -67,7 +67,6 @@ K = 3
 CONDITIONS = ("C0", "C1")
 ANCHOR_SAMPLE_IDX = 500  # reserved (ADR-008): one anchor per instance, shared by all conditions
 SEQUENTIAL_SAMPLE_BASE = 100  # the first idea of a sequence reads like C0's: never the same draw
-CONTENT_FILTER = "content management policy"  # in the provider's 400 message
 SetKey = tuple[str, str]  # (instance, condition)
 
 
@@ -137,25 +136,32 @@ class Baseline(Smoke):
         ideation = self.prompt("ideation")
         messages = ideation_messages(x, k, ideation, previous)
         extra = {"instance": x.id, "condition": condition}
-        c = await self.call(f"gen {condition}", gen, messages, sample_idx=sample_idx,
-                            client=client, extra=extra)  # fmt: skip
-        parsed, attempt = parse_set(c.content, k), 0
-        if parsed.retryable:  # ADR-006: one retry, json_error only
-            attempt = 1
-            c = await self.call(f"gen {condition} retry", gen, messages, sample_idx=sample_idx,
-                                attempt=1, client=client, extra=extra)  # fmt: skip
+        attempt = 0
+        try:
+            c = await self.call(f"gen {condition}", gen, messages, sample_idx=sample_idx,
+                                client=client, extra=extra)  # fmt: skip
             parsed = parse_set(c.content, k)
+            if parsed.retryable:  # ADR-006: one retry, json_error only
+                attempt = 1
+                c = await self.call(f"gen {condition} retry", gen, messages, sample_idx=sample_idx,
+                                    attempt=1, client=client, extra=extra)  # fmt: skip
+                parsed = parse_set(c.content, k)
+            call_key, usage = c.key, c.usage
+        except ContentFilteredError as e:
+            # Invalid, q = 0, reported apart; the run goes on (ADR-006, amendment 6).
+            self.content_filtered.append({"judge": "generation", "attempt": attempt, **extra})
+            parsed, call_key, usage = filtered_set(k), e.key, Usage()
         records = records_from_set(
             parsed,
             cards=[None] * k,
             run_id=self.run_id,
             instance=x.id,
             condition=condition,
-            model=c.model,
+            model=gen["model"],
             prompt_hash=ideation.hash,
             seed=None,
-            call_key=c.key,
-            usage=c.usage,
+            call_key=call_key,
+            usage=usage,
             attempt=attempt,
         )
         self.progress["generations"] += 1
@@ -210,17 +216,15 @@ class Baseline(Smoke):
     async def judge_call(self, client, judge: str, prompt, mode, messages, parse, ids: dict):
         """One judge call with one retry on a broken output contract.
 
-        A request refused by the provider's content filter is a missing value, not a crash:
-        it is logged and counted, never reworded or retried.
+        A request the provider's content filter refuses twice is a missing value, not a crash
+        (ADR-006, amendment 6): it is logged and counted, never reworded.
         """
         for attempt in (0, 1):
             try:
                 c = await self.call(
                     judge, mode, messages, attempt=attempt, client=client, extra=ids
                 )
-            except openai.BadRequestError as e:
-                if CONTENT_FILTER not in str(e):
-                    raise
+            except ContentFilteredError:
                 self.content_filtered.append({"judge": judge, **ids})
                 self.judge_rows.append(
                     {

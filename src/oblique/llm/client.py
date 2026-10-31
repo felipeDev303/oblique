@@ -4,7 +4,9 @@ Both providers speak the OpenAI Chat Completions protocol. Every call goes
 through the local cache; only successful responses are cached. Transient
 errors (429, timeouts, connection errors, 5xx) are retried with exponential
 backoff and full jitter. Identical requests in flight are deduplicated so the
-same response is never paid for twice.
+same response is never paid for twice. A request the provider's content filter
+refuses gets one identical retry, then raises `ContentFilteredError` (ADR-006,
+amendment 6): it is never cached, so a resumed run asks again.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 META_BASE_URL = "https://api.meta.ai/v1"
 SPARK_OPEN_BASETEN = "meta-models/muse-spark-open-1026"
+CONTENT_FILTER = "content management policy"  # in the provider's 400 message
 DEFAULT_TIMEOUT = 180.0  # seconds per attempt; generations take ~45 s (R-20261030-02)
 
 RETRYABLE = (
@@ -39,6 +42,14 @@ RETRYABLE = (
     openai.APIConnectionError,
     openai.InternalServerError,
 )
+
+
+class ContentFilteredError(Exception):
+    """The provider's content filter refused a request twice. `key` is its cache key."""
+
+    def __init__(self, key: str, message: str):
+        super().__init__(message)
+        self.key = key
 
 
 @dataclass(frozen=True)
@@ -116,6 +127,8 @@ class Stats:
     retries: int = 0
     rate_limited: int = 0
     limit_reductions: int = 0
+    content_filter_retries: int = 0
+    content_filtered: int = 0
     usage: Usage = field(default_factory=Usage)
 
 
@@ -240,7 +253,7 @@ class LLMClient:
                 with attempt:
                     epoch = self.limiter.epoch
                     try:
-                        raw = await self._openai().chat.completions.create(**request)
+                        raw = await self._create(key, request)
                     except openai.RateLimitError:
                         if self.limiter.on_rate_limited(epoch):
                             self.stats.limit_reductions += 1
@@ -265,6 +278,22 @@ class LLMClient:
         self.stats.api_calls += 1
         self.stats.usage = self.stats.usage + usage
         return response
+
+    async def _create(self, key: str, request: dict[str, Any]) -> Any:
+        create = self._openai().chat.completions.create
+        try:
+            return await create(**request)
+        except openai.BadRequestError as e:
+            if CONTENT_FILTER not in str(e):
+                raise
+            self.stats.content_filter_retries += 1
+        try:
+            return await create(**request)
+        except openai.BadRequestError as e:
+            if CONTENT_FILTER not in str(e):
+                raise
+            self.stats.content_filtered += 1
+            raise ContentFilteredError(key, str(e)) from e
 
     def _on_retry(self, state: RetryCallState) -> None:
         exc = state.outcome.exception() if state.outcome else None

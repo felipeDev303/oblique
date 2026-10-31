@@ -36,6 +36,7 @@ class InvalidReason(StrEnum):
     missing_field = "missing_field"
     not_text = "not_text"  # field present but not a string
     empty_field = "empty_field"  # field empty or whitespace only
+    content_filtered = "content_filtered"  # the provider's filter refused the request twice
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,12 @@ def _check_idea(index: int, obj: Any) -> Slot:
         if not obj[field].strip():
             return Slot(index, None, InvalidReason.empty_field, field)
     return Slot(index, IdeaCard.model_validate(obj))
+
+
+def filtered_set(k: int) -> ParsedSet:
+    """A generation the content filter refused: K invalid slots (ADR-006, amendment 6)."""
+    slots = tuple(Slot(i, None, InvalidReason.content_filtered) for i in range(k))
+    return ParsedSet(k, slots)
 
 
 def parse_set(text: str | None, k: int) -> ParsedSet:

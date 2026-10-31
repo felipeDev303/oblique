@@ -8,7 +8,7 @@ import pytest
 from tenacity import wait_none
 
 from oblique.cache import Cache
-from oblique.llm import LLMClient, Usage
+from oblique.llm import ContentFilteredError, LLMClient, Usage
 from oblique.llm.client import ConcurrencyLimiter
 
 MSGS = [{"role": "user", "content": "propose an idea"}]
@@ -38,9 +38,9 @@ class _Raw:
         return self._data
 
 
-def _status_error(cls, status: int):
+def _status_error(cls, status: int, message: str = "boom"):
     request = httpx.Request("POST", "https://example.invalid/v1/chat/completions")
-    return cls("boom", response=httpx.Response(status, request=request), body=None)
+    return cls(message, response=httpx.Response(status, request=request), body=None)
 
 
 class FakeTransport:
@@ -178,6 +178,39 @@ def test_one_burst_of_429s_lowers_the_limit_once():
     assert limiter.on_rate_limited(limiter.epoch) is True and limiter.limit == 2
     assert limiter.on_rate_limited(limiter.epoch) is True and limiter.limit == 1
     assert limiter.on_rate_limited(limiter.epoch) is False and limiter.limit == 1
+
+
+FILTERED = "filtered due to the prompt triggering our content management policy"
+
+
+def test_a_filtered_request_gets_one_identical_retry(cache):
+    transport = FakeTransport(
+        [_status_error(openai.BadRequestError, 400, FILTERED), _response("ok")]
+    )
+    llm = _client(cache, transport)
+    result = asyncio.run(llm.complete("m", MSGS))
+    assert result.content == "ok"
+    assert len(transport.calls) == 2 and transport.calls[0] == transport.calls[1]
+    assert llm.stats.content_filter_retries == 1 and llm.stats.content_filtered == 0
+
+
+def test_a_filter_that_persists_raises_and_is_not_cached(cache):
+    error = _status_error(openai.BadRequestError, 400, FILTERED)
+    transport = FakeTransport([error, error, _response("later")])
+    llm = _client(cache, transport)
+    with pytest.raises(ContentFilteredError) as e:
+        asyncio.run(llm.complete("m", MSGS))
+    assert len(transport.calls) == 2 and llm.stats.content_filtered == 1
+    assert e.value.key not in cache
+    # A resumed run asks again.
+    assert asyncio.run(llm.complete("m", MSGS)).content == "later"
+
+
+def test_other_bad_requests_are_not_retried(cache):
+    transport = FakeTransport([_status_error(openai.BadRequestError, 400, "bad parameter")])
+    with pytest.raises(openai.BadRequestError):
+        asyncio.run(_client(cache, transport).complete("m", MSGS))
+    assert len(transport.calls) == 1
 
 
 def test_transient_errors_are_retried_and_not_cached(cache):

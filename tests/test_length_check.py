@@ -14,7 +14,9 @@ from tenacity import wait_none
 
 from oblique import baseline, length_check
 from oblique.bench import Instance
+from oblique.generate.validate import InvalidReason
 from oblique.length_check import distribution
+from oblique.llm import ContentFilteredError
 from oblique.prompts import IDEATION_V3, PROMPTS
 
 INSTANCES = [
@@ -181,18 +183,35 @@ def _status_400(message: str) -> openai.BadRequestError:
     return openai.BadRequestError(message, response=httpx.Response(400, request=req), body=None)
 
 
-class FilteredAPI(FakeAPI):
-    """The provider refuses the first grounding request; `message` is its error text."""
+FILTERED = "The response was filtered due to the prompt triggering our content management policy."
 
-    def __init__(self, message: str):
+
+class FilteredAPI(FakeAPI):
+    """Refuses, `times` times each, the requests on one grounding prompt (`grounding`) and on the
+    first `gens` K = 1 generation prompts; `message` is the error text."""
+
+    def __init__(self, message: str = FILTERED, *, times: int = 99, grounding=True, gens=0):
         super().__init__()
         self.message = message
-        self.refused = False
+        self.times = times
+        self.grounding = grounding
+        self.gens = gens
+        self.target = None
+        self.refused = 0
+        self.attempts = {}
 
     async def create(self, **request):
-        if "You assess how much" in request["messages"][0]["content"] and not self.refused:
-            self.refused = True
-            raise _status_400(self.message)
+        system, user = (m["content"] for m in request["messages"])
+        if self.grounding and "You assess how much" in system:
+            self.target = self.target or user
+            if user == self.target and self.refused < self.times:
+                self.refused += 1
+                raise _status_400(self.message)
+        if "research scientist" in system and "exactly 1 object" in user and self.gens:
+            seen = self.attempts.setdefault(user, 0)
+            if len(self.attempts) <= self.gens and seen < self.times:
+                self.attempts[user] += 1
+                raise _status_400(self.message)
         return await super().create(**request)
 
 
@@ -208,17 +227,86 @@ def _check(tmp_path, monkeypatch, api):
 
 
 def test_a_content_filtered_judgment_is_counted_as_missing(tmp_path, monkeypatch):
-    message = (
-        "The response was filtered due to the prompt triggering our content management policy."
-    )
-    check = _check(tmp_path, monkeypatch, FilteredAPI(message))
+    api = FilteredAPI()
+    check = _check(tmp_path, monkeypatch, api)
     asyncio.run(check.run())
+    assert api.refused == 2  # one identical retry, then missing
     result = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))
     assert len(result["content_filtered"]) == 1
     assert result["content_filtered"][0]["judge"] == "grounding-spark"
     assert sum(v is None for v in check.ground.values()) == 1
     rows = (tmp_path / "run" / "judgments.jsonl").read_text("utf-8").splitlines()
     assert sum('"content_filter"' in r for r in rows) == 1
+
+
+def test_a_filter_that_passes_on_the_identical_retry_counts_as_normal(tmp_path, monkeypatch):
+    api = FilteredAPI(times=1)
+    check = _check(tmp_path, monkeypatch, api)
+    asyncio.run(check.run())
+    assert api.refused == 1 and check.content_filtered == []
+    assert all(v is not None for v in check.ground.values())
+
+
+def test_a_filtered_generation_is_invalid_and_the_run_goes_on(tmp_path, monkeypatch):
+    check = _check(tmp_path, monkeypatch, FilteredAPI(grounding=False, gens=1))
+    asyncio.run(check.run())
+    result = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))
+    assert [f["judge"] for f in result["content_filtered"]] == ["generation"]
+    invalid = [r for recs in check.slots.values() for r in recs if not r.valid]
+    assert len(invalid) == 1 and invalid[0].invalid_reason == InvalidReason.content_filtered
+    assert invalid[0].instance == result["content_filtered"][0]["instance"]
+    # q = 0 for the invalid idea, not a missing value: its instance stays in the mean.
+    by_instance = check.q_report("anchor")[invalid[0].condition]["by_instance"]
+    assert invalid[0].instance in by_instance
+
+
+def test_a_filtered_anchor_leaves_its_instance_without_q(tmp_path, monkeypatch):
+    check = _check(tmp_path, monkeypatch, FilteredAPI(grounding=False))
+
+    async def scenario():
+        client = check.new_client("meta", 4)
+        original = client.complete
+
+        async def complete(model, messages, **kw):
+            if kw.get("sample_idx") == baseline.ANCHOR_SAMPLE_IDX:
+                raise ContentFilteredError("key", FILTERED)
+            return await original(model, messages, **kw)
+
+        client.complete = complete
+        await check.generate_anchors(client, INSTANCES[:1])
+
+    check.out.mkdir(parents=True, exist_ok=True)
+    asyncio.run(scenario())
+    assert check.anchors == {INSTANCES[0].id: None}
+    assert check.content_filtered[0]["condition"] == "ANCHOR"
+
+
+def test_a_filtered_sequence_idea_leaves_the_rest_running(tmp_path, monkeypatch):
+    check = _check(tmp_path, monkeypatch, FilteredAPI(grounding=False))
+
+    async def scenario():
+        client = check.new_client("meta", 4)
+        original = client.complete
+
+        async def complete(model, messages, **kw):
+            if kw.get("sample_idx") == baseline.SEQUENTIAL_SAMPLE_BASE + 1:
+                raise ContentFilteredError("key", FILTERED)
+            return await original(model, messages, **kw)
+
+        client.complete = complete
+        records, previous = [], []
+        for slot in range(3):
+            sample_idx = baseline.SEQUENTIAL_SAMPLE_BASE + slot
+            r = (await check.generate_call(client, INSTANCES[0], "C1s", 1, sample_idx, previous))[0]
+            records.append(r)
+            if r.valid:
+                previous = [*previous, r.idea]
+        return records, previous
+
+    records, previous = asyncio.run(scenario())
+    assert [r.valid for r in records] == [True, False, True]
+    assert records[1].invalid_reason == InvalidReason.content_filtered
+    assert len(previous) == 2
 
 
 def test_any_other_400_still_stops_the_run(tmp_path, monkeypatch):
