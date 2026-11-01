@@ -17,7 +17,7 @@ from oblique.bench import Instance
 from oblique.deck import load_deck
 from oblique.deck.controls import DECK_DIR, pick_controls
 from oblique.generate.validate import InvalidReason
-from oblique.map_sweep import MapSweep, classify_band, render_summary
+from oblique.map_sweep import MapSweep, classify_band, render_summary, select_ml
 from oblique.smoke import BudgetExceeded
 
 INSTANCES = [
@@ -189,10 +189,11 @@ def test_report_gives_every_metric_and_classifies_the_bands(cfg, tmp_path, monke
     result = metrics(tmp_path)
     rows = by_condition(result)
     assert set(rows) == {"OB-001", "E6-1", "CTRL-R-001", "C2", "C2-T"}
-    assert result["reference"]["d_median_c2"] == 0.0
+    assert result["reference"]["d_c2"]["mean"] == 0.0
     long_card = rows["OB-001"]
     assert long_card["q_raw"]["mean"] == 1.0 and long_card["d"]["mean"] == 1.0
     assert long_card["m"]["mean"] == 1.0 and long_card["band"] == "liminal"
+    assert long_card["confirmed"] is True
     assert long_card["grounding"]["mean"] == 0.75
     assert long_card["q_controlled"]["n"] == 6
     assert rows["E6-1"]["q_raw"]["mean"] == 0.0 and rows["E6-1"]["band"] == "destructive"
@@ -201,6 +202,9 @@ def test_report_gives_every_metric_and_classifies_the_bands(cfg, tmp_path, monke
     assert rows["OB-001"]["invalid_rate"]["mean"] == 0.0
     assert rows["OB-001"]["filtered_rate"]["mean"] == 0.0
     assert result["bands"]["liminal"] == ["OB-001"]
+    assert result["liminal_confirmed"] == ["OB-001"]
+    # One liminal OB card is below the minimum of 3, so ML falls back to the non-destructive OB.
+    assert result["ml"] == {"cards": ["OB-001"], "fallback": True, "liminal_ob": ["OB-001"]}
     assert rows["OB-001"]["q_controlled_minus_c2"] is not None
     assert rows["C2"]["q_raw_minus_c2"] is None
     assert result["spearman_d_llm_vs_embed"]["n"] == 90
@@ -324,29 +328,60 @@ def test_a_filtered_anchor_leaves_its_instance_out_of_q(cfg, tmp_path, monkeypat
 
 
 @pytest.mark.parametrize(
-    "q_hi, d_lo, d_hi, band",
+    "dq_lo, dq_hi, dd_lo, dd_hi, band, confirmed",
     [
-        (0.60, 0.40, 0.60, "liminal"),  # far, quality holds
-        (0.40, 0.40, 0.60, "destructive"),  # far, quality falls
-        (0.60, 0.20, 0.40, "inert"),  # CI contains the reference
-        (0.40, 0.20, 0.40, "destructive"),  # inert in d, but q decides first
-        (0.60, 0.10, 0.20, "below_reference"),  # closer than a re-sample
-        (0.45, 0.40, 0.60, "liminal"),  # exactly q(C2) - delta is not below it
-        (0.60, 0.30, 0.60, "inert"),  # lower bound on the reference is not above it
+        (-0.02, 0.10, 0.05, 0.30, "liminal", True),  # far, and q is clearly not lower
+        (-0.20, 0.10, 0.05, 0.30, "liminal", False),  # far, but the CI of q reaches below -delta
+        (-0.20, -0.10, 0.05, 0.30, "destructive", False),  # far, q falls
+        (-0.20, -0.10, -0.10, 0.10, "destructive", False),  # priority over inert
+        (-0.20, -0.10, -0.30, -0.10, "destructive", False),  # priority over convergent
+        (-0.02, 0.10, -0.10, 0.10, "inert", False),  # the CI of d contains 0
+        (-0.02, 0.10, 0.00, 0.10, "inert", False),  # a bound exactly at 0 contains it
+        (-0.02, 0.10, -0.30, -0.10, "convergent", False),  # closer than a re-sample
+        (-0.20, -0.05, 0.05, 0.30, "liminal", False),  # hi exactly at -delta is not below it
+        (-0.05, 0.10, 0.05, 0.30, "liminal", False),  # lo exactly at -delta is not above it
     ],
 )
-def test_classify_band(q_hi, d_lo, d_hi, band):
-    assert classify_band(q_hi, 0.50, d_lo, d_hi, 0.30, 0.05)["band"] == band
+def test_classify_band(dq_lo, dq_hi, dd_lo, dd_hi, band, confirmed):
+    out = classify_band(dq_lo, dq_hi, dd_lo, dd_hi, 0.05)
+    assert out["band"] == band and out["confirmed"] is confirmed
+    assert out["destructive"] is (band == "destructive")
 
 
-def test_classify_band_reports_every_flag():
-    out = classify_band(0.40, 0.50, 0.20, 0.40, 0.30, 0.05)
-    assert out == {
-        "band": "destructive",
-        "destructive": True,
-        "inert": True,
-        "d_above_reference": False,
+def _card(condition, band, m, origin="seed"):
+    return {"condition": condition, "band": band, "origin": origin, "m": {"mean": m}}
+
+
+def test_ml_is_every_liminal_ob_card():
+    rows = [
+        _card("OB-001", "liminal", 0.1),
+        _card("OB-002", "liminal", 0.2),
+        _card("OB-003", "liminal", 0.3),
+        _card("OB-004", "inert", 0.9),
+        _card("E6-1", "liminal", 0.9, "paper"),
+        _card("CTRL-R-001", "liminal", 0.9, "control"),
+        _card("C2-T", "liminal", 0.9, "no_card"),
+    ]
+    assert select_ml(rows) == {
+        "cards": ["OB-001", "OB-002", "OB-003"],
+        "fallback": False,
+        "liminal_ob": ["OB-001", "OB-002", "OB-003"],
     }
+
+
+def test_ml_falls_back_to_the_six_non_destructive_ob_cards_with_highest_m():
+    rows = [_card(f"OB-{i:03d}", "inert", i / 100) for i in range(1, 10)]
+    rows += [
+        _card("OB-050", "destructive", 0.99),
+        _card("OB-051", "liminal", 0.001),
+        _card("OB-052", "liminal", 0.002),
+        _card("E6-1", "inert", 0.99, "paper"),
+        _card("CTRL-R-001", "inert", 0.99, "control"),
+    ]
+    out = select_ml(rows)
+    assert out["fallback"] is True
+    assert out["liminal_ob"] == ["OB-051", "OB-052"]
+    assert out["cards"] == ["OB-009", "OB-008", "OB-007", "OB-006", "OB-005", "OB-004"]
 
 
 def test_committed_config_lists_the_deck_and_the_seeded_controls(tmp_path):

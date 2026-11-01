@@ -11,6 +11,8 @@ Config: `configs/R-20261030-02.yaml`. Generator `muse-spark-1.3-contributor`, te
 | Throughput at 16 | **18.1 sets/min** (17.6 and 18.6 per wave) |
 | Decision | Contributor holds 16 → generator and Spark judges in Contributor |
 
+Correction (2026-11-01): the zero above came from a single pair of calls. In R-20261030-05, K = 1 calls with the same prefix had about 80% of their input cached.
+
 | Level | Wave | OK | 429 | Wall (s) | p50 / p90 / max (s) | Sets/min |
 |---|---|---|---|---|---|---|
 | 4 | 0 | 4/4 | 0 | 43.9 | 40.1 / 43.9 / 43.9 | 5.5 |

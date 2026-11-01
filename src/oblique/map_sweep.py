@@ -20,14 +20,14 @@ An invalid idea has q = 0, m = 0 and no d or grounding (ADR-006); in the regress
 a loss at equal length. A missing judgment leaves that value empty, and the instance out of the
 paired comparisons that need it (ADR-006, amendment 6).
 
-Bands (ADR-003), against C2: see `classify_band`.
+Bands (ADR-003), from paired CIs against C2: see `classify_band`. The ML deck: see `select_ml`.
+CIs use 2,000 resamples, refitting the regression each time (ADR-003, `n_boot` in the config).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import statistics
 import sys
 import time
 from pathlib import Path
@@ -53,35 +53,49 @@ CONDITION_SAMPLE_IDX = 600  # reserved: a card or C2 never shares a draw with an
 S0 = "C1s"
 REFERENCE = "C2"
 N_CONTROLS_IN_MAP = 10
+MIN_LIMINAL = 3  # ADR-003: fewer liminal OB cards than this and ML falls back
+FALLBACK_SIZE = 6
 
 
 def classify_band(
-    q_hi: float, q_ref: float, d_lo: float, d_hi: float, d_ref: float, delta: float
+    dq_lo: float, dq_hi: float, dd_lo: float, dd_hi: float, delta: float
 ) -> dict[str, Any]:
-    """ADR-003 bands from the q controlled for length and the distance.
+    """ADR-003 bands from the paired CIs against C2 of q controlled for length (dq) and d (dd).
 
-    destructive: upper bound of q below q(C2) - delta. inert: the CI of d contains the reference.
-    liminal: lower bound of d above the reference, and not destructive.
-    ADR-003 leaves two cases open, so all three flags are reported along with one band: q decides
-    first, so an inert card with a collapsed q is destructive; and a CI of d entirely below
-    the reference fits no band ("below_reference").
+    destructive: upper bound of dq < -delta, and it takes priority. Otherwise, from dd alone:
+    liminal if its lower bound > 0, convergent if its upper bound < 0, inert if it contains 0.
+    A liminal card is "confirmed" if also the lower bound of dq > -delta.
     """
-    destructive = q_hi < q_ref - delta
-    inert = d_lo <= d_ref <= d_hi
-    above = d_lo > d_ref
+    destructive = dq_hi < -delta
     if destructive:
         band = "destructive"
-    elif above:
+    elif dd_lo > 0:
         band = "liminal"
-    elif inert:
-        band = "inert"
+    elif dd_hi < 0:
+        band = "convergent"
     else:
-        band = "below_reference"
-    return {"band": band, "destructive": destructive, "inert": inert, "d_above_reference": above}
+        band = "inert"
+    return {
+        "band": band,
+        "confirmed": band == "liminal" and dq_lo > -delta,
+        "destructive": destructive,
+    }
 
 
-def ci_or_none(values: list[float]) -> dict[str, float | int] | None:
-    return ci_dict(bootstrap_mean_ci(values)) if values else None
+def select_ml(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """The ML deck (ADR-003): every liminal OB card; with fewer than 3, the 6 non-destructive
+    OB cards with the highest m, marked as fallback. E6 and CTRL-R cards never enter."""
+    seed = [r for r in rows if r["origin"] == "seed"]
+    liminal = sorted(r["condition"] for r in seed if r["band"] == "liminal")
+    if len(liminal) >= MIN_LIMINAL:
+        return {"cards": liminal, "fallback": False, "liminal_ob": liminal}
+    candidates = [r for r in seed if r["band"] != "destructive" and r["m"] is not None]
+    candidates.sort(key=lambda r: (-r["m"]["mean"], r["condition"]))
+    return {
+        "cards": [r["condition"] for r in candidates[:FALLBACK_SIZE]],
+        "fallback": True,
+        "liminal_ob": liminal,
+    }
 
 
 class MapSweep(LengthCheck):
@@ -276,31 +290,37 @@ class MapSweep(LengthCheck):
             for cond in self.conditions
         }
 
+        n_boot = self.cfg["n_boot"]
+
         def column(cond: str, name: str) -> dict[str, float]:
             return {i: v[name] for i, v in values[cond].items() if v[name] is not None}
+
+        def ci_or_none(data: list[float]) -> dict[str, float | int] | None:
+            return ci_dict(bootstrap_mean_ci(data, n_boot=n_boot)) if data else None
 
         controlled = controlled_win_rates(
             self.regression_rows(values),
             self.conditions,
             comparisons=self.comparisons(),
-            n_boot=self.cfg.get("n_boot", 10_000),
+            n_boot=n_boot,
         )
         delta = self.cfg["delta"]
-        d_ref = statistics.median(column(REFERENCE, "d").values())
-        q_ref = controlled["rates"][REFERENCE]["mean"]
 
         def paired(cond: str, name: str):
             a, b = column(cond, name), column(REFERENCE, name)
             common = set(a) & set(b)
             if cond == REFERENCE or not common:
                 return None
-            return ci_dict(paired_delta_ci({i: a[i] for i in common}, {i: b[i] for i in common}))
+            return ci_dict(
+                paired_delta_ci({i: a[i] for i in common}, {i: b[i] for i in common}, n_boot=n_boot)
+            )
 
         rows = []
         for cond in self.conditions:
             card = self.cards.get(cond)
-            d = ci_or_none(list(column(cond, "d").values()))
             q_controlled = controlled["rates"][cond]
+            dq = controlled["differences"].get(f"{cond}-{REFERENCE}")
+            dd = paired(cond, "d")
             words = list(column(cond, "words").values())
             cell: dict[str, Any] = {
                 "condition": cond,
@@ -308,11 +328,11 @@ class MapSweep(LengthCheck):
                 "origin": card.origin if card else "no_card",
                 "family": card.family.value if card and card.family else None,
                 "q_controlled": q_controlled,
-                "q_controlled_minus_c2": controlled["differences"].get(f"{cond}-{REFERENCE}"),
+                "q_controlled_minus_c2": dq,
                 "q_raw": ci_or_none(list(column(cond, "q").values())),
                 "q_raw_minus_c2": paired(cond, "q"),
-                "d": d,
-                "d_minus_c2": paired(cond, "d"),
+                "d": ci_or_none(list(column(cond, "d").values())),
+                "d_minus_c2": dd,
                 "d_embed": ci_or_none(list(column(cond, "d_embed").values())),
                 "m": ci_or_none(list(column(cond, "m").values())),
                 "m_minus_c2": paired(cond, "m"),
@@ -330,10 +350,10 @@ class MapSweep(LengthCheck):
             }
             if cond == REFERENCE:
                 cell |= {"band": "reference"}
-            elif d is None:
+            elif dd is None:
                 cell |= {"band": "unclassified"}
             else:
-                cell |= classify_band(q_controlled["hi"], q_ref, d["lo"], d["hi"], d_ref, delta)
+                cell |= classify_band(dq["lo"], dq["hi"], dd["lo"], dd["hi"], delta)
             rows.append(cell)
 
         pairs = [(v, d_emb[k]) for k, v in self.d_llm.items() if v is not None and k in d_emb]
@@ -352,7 +372,12 @@ class MapSweep(LengthCheck):
             "s0_valid_ideas": sum(
                 r.valid for (_, c), rs in self.slots.items() if c == S0 for r in rs
             ),
-            "reference": {"d_median_c2": d_ref, "q_controlled_c2": q_ref, "delta": delta},
+            "reference": {
+                "q_controlled_c2": controlled["rates"][REFERENCE],
+                "d_c2": ci_or_none(list(column(REFERENCE, "d").values())),
+                "delta": delta,
+                "n_boot": n_boot,
+            },
             "length": {
                 "log_odds_per_10_words": controlled["log_odds_per_unit"],
                 "judgments_in_regression": controlled["judgments"],
@@ -368,6 +393,8 @@ class MapSweep(LengthCheck):
                 band: [r["condition"] for r in rows if r["band"] == band]
                 for band in sorted({r["band"] for r in rows})
             },
+            "liminal_confirmed": [r["condition"] for r in rows if r.get("confirmed")],
+            "ml": select_ml(rows),
             "conditions": rows,
             "content_filtered": self.content_filtered,
             "missing_values": {
@@ -505,22 +532,27 @@ def render_summary(result: dict[str, Any]) -> str:
         f"# {result['run_id']} · Map of the deck on split A",
         "",
         f"{result['instances']} instances, {len(result['conditions'])} conditions, "
-        f"US${result['spent_usd']:.2f}. Reference: C2 median d = {ref['d_median_c2']:.3f}, "
-        f"controlled q(C2) = {ref['q_controlled_c2']:.3f}, delta = {ref['delta']}. "
+        f"US${result['spent_usd']:.2f}. Reference C2: controlled q = {_ci(ref['q_controlled_c2'])}, "
+        f"d = {_ci(ref['d_c2'])}; delta = {ref['delta']}. "
         f"Spearman LLM vs embedding d = {result['spearman_d_llm_vs_embed']['rho']:.2f}. "
         f"Log-odds per 10 words: {_ci(result['length']['log_odds_per_10_words'])}.",
         "",
-        "Values are means with 95% percentile CIs over instances, uncorrected across cards. "
-        "Sorted by m.",
+        f"**ML ({'fallback' if result['ml']['fallback'] else 'liminal OB cards'}):** "
+        f"{', '.join(result['ml']['cards']) or 'none'}.",
         "",
-        "| Condition | Band | q controlled | q raw | d | m | Grounding | Invalid | Filtered |",
-        "|---|---|---|---|---|---|---|---|---|",
+        f"Values are means with 95% percentile CIs over instances ({ref['n_boot']} resamples), "
+        "uncorrected across cards. Bands per ADR-003. Sorted by m.",
+        "",
+        "| Condition | Band | Δq controlled | q controlled | q raw | Δd | d | m | Grounding "
+        "| Invalid | Filtered |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     rows = sorted(result["conditions"], key=lambda r: -(r["m"]["mean"] if r["m"] else -1))
     for r in rows:
         lines.append(
-            f"| {r['condition']} | {r['band']} | {_ci(r['q_controlled'])} | {_ci(r['q_raw'])} "
-            f"| {_ci(r['d'])} | {_ci(r['m'])} | {_ci(r['grounding'])} "
+            f"| {r['condition']} | {r['band']}{' (confirmed)' if r.get('confirmed') else ''} "
+            f"| {_ci(r['q_controlled_minus_c2'])} | {_ci(r['q_controlled'])} | {_ci(r['q_raw'])} "
+            f"| {_ci(r['d_minus_c2'])} | {_ci(r['d'])} | {_ci(r['m'])} | {_ci(r['grounding'])} "
             f"| {r['invalid_rate']['mean']:.3f} | {r['filtered_rate']['mean']:.3f} |"
         )
     return "\n".join(lines) + "\n"

@@ -22,6 +22,7 @@ no_card:
   C2-T: {temperature: 1.5}   # same, at the highest temperature the API accepts (R-20261030-02)
 
 delta: 0.05                  # ADR-003, ADR-008
+n_boot: 2000                 # ADR-003: the map refits the regression on 2,000 resamples
 
 generator:
   provider: meta
