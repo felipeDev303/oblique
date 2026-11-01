@@ -74,6 +74,11 @@ tests/
 - Map sweep runner (`python -m oblique.map_sweep`, with a `--plan` mode that counts calls, cost and time without calling the API): anchors, S0 = C1s, and one idea per card and instance, with the `inject-v1` frame around each card; quality against the anchor, grounding and distance to S0. A run resumes from the response cache, and a spend ledger keeps its budget across launches. Reports q controlled for length (joint logistic regression at equal length) and raw q, d, m, grounding, and invalid and filtered rates with CIs, plus the ADR-003 bands.
 - Judge concurrency limit that climbs by one after 50 straight successes up to a ceiling and halves on a 429.
 
+### Nov 1 (Day 7)
+
+- Map of the deck on split A (R-20261031-01, US$3.15, 16,895 calls): 48 conditions over 50 instances, classified with the bands fixed in ADR-003. The selection rule gives an ML of 18 of the 30 seed cards, and no liminal card reaches the confirmed sublabel, because the CI of Δq is wider than the margin. 6 of the 10 random-noun controls also land in the liminal band, the same share as the seed cards. Results in [`runs/R-20261031-01/summary.md`](runs/R-20261031-01/summary.md).
+- The map summary now prints CIs for the invalid and filtered rates and lists the confirmed liminal cards.
+
 ## License
 
 Code: [MIT](LICENSE). The card deck (`deck/cards/`) is released under [CC BY 4.0](deck/LICENSE).

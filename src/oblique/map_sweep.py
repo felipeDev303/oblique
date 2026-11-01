@@ -532,13 +532,16 @@ def render_summary(result: dict[str, Any]) -> str:
         f"# {result['run_id']} · Map of the deck on split A",
         "",
         f"{result['instances']} instances, {len(result['conditions'])} conditions, "
-        f"US${result['spent_usd']:.2f}. Reference C2: controlled q = {_ci(ref['q_controlled_c2'])}, "
-        f"d = {_ci(ref['d_c2'])}; delta = {ref['delta']}. "
+        f"US${result['spent_usd']:.2f}. Reference C2: "
+        f"controlled q = {_ci(ref['q_controlled_c2'])}, d = {_ci(ref['d_c2'])}; "
+        f"delta = {ref['delta']}. "
         f"Spearman LLM vs embedding d = {result['spearman_d_llm_vs_embed']['rho']:.2f}. "
         f"Log-odds per 10 words: {_ci(result['length']['log_odds_per_10_words'])}.",
         "",
         f"**ML ({'fallback' if result['ml']['fallback'] else 'liminal OB cards'}):** "
         f"{', '.join(result['ml']['cards']) or 'none'}.",
+        "",
+        f"**Liminal confirmed:** {', '.join(result['liminal_confirmed']) or 'none'}.",
         "",
         f"Values are means with 95% percentile CIs over instances ({ref['n_boot']} resamples), "
         "uncorrected across cards. Bands per ADR-003. Sorted by m.",
@@ -553,7 +556,7 @@ def render_summary(result: dict[str, Any]) -> str:
             f"| {r['condition']} | {r['band']}{' (confirmed)' if r.get('confirmed') else ''} "
             f"| {_ci(r['q_controlled_minus_c2'])} | {_ci(r['q_controlled'])} | {_ci(r['q_raw'])} "
             f"| {_ci(r['d_minus_c2'])} | {_ci(r['d'])} | {_ci(r['m'])} | {_ci(r['grounding'])} "
-            f"| {r['invalid_rate']['mean']:.3f} | {r['filtered_rate']['mean']:.3f} |"
+            f"| {_ci(r['invalid_rate'])} | {_ci(r['filtered_rate'])} |"
         )
     return "\n".join(lines) + "\n"
 
