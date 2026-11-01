@@ -78,6 +78,7 @@ tests/
 
 - Map of the deck on split A (R-20261031-01, US$3.15, 16,895 calls): 48 conditions over 50 instances, classified with the bands fixed in ADR-003. The selection rule gives an ML of 18 of the 30 seed cards, and no liminal card reaches the confirmed sublabel, because the CI of Δq is wider than the margin. 6 of the 10 random-noun controls also land in the liminal band, the same share as the seed cards. Results in [`runs/R-20261031-01/summary.md`](runs/R-20261031-01/summary.md).
 - The map summary now prints CIs for the invalid and filtered rates and lists the confirmed liminal cards.
+- Evolution G1 (ADR-010, `python -m oblique.evolve.g1`, run R-20261101-01, US$0.23): one call to Muse Wonder with the map as data, which proposes 15 cards with family, parents and a justification. The call is saved verbatim in [`deck/evolution/G1/`](deck/evolution/G1/). The runner checks the deck rules and reports the closest existing card for review. The cards are not measured yet.
 
 ## License
 

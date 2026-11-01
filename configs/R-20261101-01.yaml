@@ -21,4 +21,4 @@ budget:
   stop_usd: 0.50
   ledger: true
   prices_per_m:
-    muse-wonder-1.0: {in: 4.0, cached: 0.20, out: 20.0}   # reference (unofficial)
+    muse-wonder-1.0: {in: 4.0, cached: 0.20, out: 20.0}   # dev.meta.ai pricing page, 2026-11-01
