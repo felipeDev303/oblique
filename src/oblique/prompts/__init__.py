@@ -8,6 +8,7 @@ from oblique.prompts.ideation import (
     WORD_LIMITS,
     ideation_messages,
 )
+from oblique.prompts.product import IDEATION_PDF_V1
 from oblique.prompts.quality import (
     QUALITY_V1,
     QUALITY_V2,
@@ -29,12 +30,14 @@ PROMPTS = {
         QUALITY_V2,
         DISTANCE_V1,
         GROUNDING_V1,
+        IDEATION_PDF_V1,
     )
 }
 
 __all__ = [
     "DISTANCE_V1",
     "GROUNDING_V1",
+    "IDEATION_PDF_V1",
     "IDEATION_V2",
     "IDEATION_V3",
     "INJECT_V1",

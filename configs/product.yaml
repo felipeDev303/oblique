@@ -1,0 +1,33 @@
+# Bring your papers: uv run --group product python -m oblique.product.app configs/product.yaml
+cache: .cache/product.db     # separate from the experiment; never holds the PDFs (DocumentCache)
+ledger: runs/product/ledger.jsonl
+page: web/product/index.html
+host: 127.0.0.1
+port: 8000
+
+generator:
+  provider: meta
+  model: muse-spark-1.3      # Standard: Contributor lets Meta train on the content, and the app refuses it
+  params: {temperature: 1.0, max_tokens: 12000, response_format: {type: json_object}}
+  timeout_seconds: 300
+  max_attempts: 3
+
+prices_per_m:
+  muse-spark-1.3: {in: 1.25, cached: 0.15, out: 4.25}   # dev.meta.ai pricing page, 2026-11-01
+
+limits:
+  min_documents: 2
+  max_documents: 5
+  max_file_mb: 20
+  max_pages_per_document: 60
+  sets_per_session: 3
+  session_usd: 1.00          # no new call past this in a session
+  budget_usd: 10.00          # no new call past this across all sessions and restarts
+  max_running_sets: 2
+
+# ADR-010: the deck of the product is chosen after split B (ML, E6 or MG). Until then, ML from the
+# map (R-20261031-01) stands in, and the page says so. Change only this list to swap it.
+deck:
+  note: "Provisional deck: the final one is chosen after the confirmation run."
+  cards: [OB-001, OB-004, OB-005, OB-007, OB-008, OB-009, OB-011, OB-012, OB-013,
+          OB-016, OB-018, OB-020, OB-022, OB-023, OB-025, OB-026, OB-027, OB-029]

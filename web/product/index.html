@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oblique · Bring your papers</title>
+<style>
+  :root { --bg: #fbfaf7; --fg: #1d1c1a; --muted: #6a675f; --line: #dedad0; --card: #fff; --accent: #8a3b12; --warn: #8a6d12; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #171614; --fg: #ece9e1; --muted: #a29e93; --line: #3a3832; --card: #211f1c; --accent: #e8a27c; --warn: #d9bd66; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  form { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 16px; margin: 20px 0; }
+  input[type=file] { display: block; width: 100%; margin-bottom: 12px; }
+  button { font: inherit; padding: 8px 16px; border: 0; border-radius: 6px; background: var(--accent); color: var(--bg); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #error { color: var(--accent); font-weight: 600; }
+  article { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 16px; margin: 16px 0; }
+  .card { border-left: 3px solid var(--accent); padding-left: 10px; margin-bottom: 12px; }
+  .card b { display: block; font-size: .75rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 2px; font-weight: 600; }
+  blockquote { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--line); }
+  .unchecked { color: var(--warn); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bring your papers</h1>
+  <p class="muted">Three research ideas from your PDFs, each written under a different oblique card. Each idea shows its card and the passages it cites.</p>
+  <form id="form">
+    <input id="files" name="files" type="file" accept="application/pdf,.pdf" multiple required aria-label="PDF files">
+    <button id="go" type="submit">Propose three ideas</button>
+    <p id="limits" class="muted" style="margin:12px 0 0"></p>
+  </form>
+  <p id="error" role="alert"></p>
+  <p id="progress" class="muted" role="status"></p>
+  <section id="ideas"></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const FIELDS = [["problem_gap", "Gap"], ["core_claim", "Claim"], ["method", "Method"], ["inspiration", "Inspiration"]];
+let shown = 0;
+
+function el(tag, text, cls) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (cls) node.className = cls;
+  return node;
+}
+
+async function refreshLimits() {
+  const s = await (await fetch("/api/status")).json();
+  $("limits").textContent = `${s.min_documents}–${s.max_documents} PDFs, up to ${s.max_file_mb} MB and ${s.max_pages_per_document} pages each. Sets left in this session: ${s.sets_left}. Model: ${s.model}. ${s.deck_note}`;
+  $("go").disabled = s.sets_left === 0;
+}
+
+function renderIdea(item, number) {
+  const box = el("article");
+  const card = el("div", undefined, "card");
+  card.append(el("b", `Idea ${number} · card ${item.card.id}`), el("span", item.card.text));
+  box.append(card);
+  if (item.status !== "ok") {
+    box.append(el("p", item.status === "filtered"
+      ? "The provider's content filter refused this idea."
+      : "The model's reply for this idea was not valid.", "muted"));
+    return box;
+  }
+  for (const [key, label] of FIELDS) box.append(el("h2", label), el("p", item.idea[key]));
+  box.append(el("h2", "Sources"));
+  if (!item.sources.length) box.append(el("p", "The model cited no usable source for this idea.", "unchecked"));
+  for (const s of item.sources) {
+    box.append(el("p", s.name), el("blockquote", s.quote));
+    if (!s.found) box.append(el("p", "Quote not found in the extracted text; check it by hand.", "unchecked"));
+  }
+  if (item.rejected) box.append(el("p", `${item.rejected} cited source(s) dropped: they named no uploaded document.`, "unchecked"));
+  return box;
+}
+
+async function poll(id) {
+  const response = await fetch(`/api/sets/${id}`);
+  if (!response.ok) throw new Error("The set could not be read.");
+  const job = await response.json();
+  while (shown < job.ideas.length) {
+    $("ideas").append(renderIdea(job.ideas[shown], shown + 1));
+    shown += 1;
+  }
+  if (job.status === "running") {
+    $("progress").textContent = `Writing idea ${shown + 1} of ${job.k}. Each one takes about a minute.`;
+    setTimeout(() => poll(id).catch(fail), 2000);
+    return;
+  }
+  $("progress").textContent = "";
+  if (job.message) $("error").textContent = job.message;
+  await refreshLimits();
+}
+
+function fail(e) {
+  $("progress").textContent = "";
+  $("error").textContent = e.message;
+  refreshLimits();
+}
+
+$("form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  $("error").textContent = "";
+  $("ideas").replaceChildren();
+  shown = 0;
+  $("go").disabled = true;
+  $("progress").textContent = "Uploading.";
+  const body = new FormData();
+  for (const file of $("files").files) body.append("files", file);
+  try {
+    const response = await fetch("/api/sets", { method: "POST", body });
+    const data = await response.json();
+    if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The upload was refused.");
+    await poll(data.id);
+  } catch (e) {
+    fail(e);
+  }
+});
+
+refreshLimits();
+</script>
+</body>
+</html>
