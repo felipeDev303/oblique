@@ -1,7 +1,13 @@
 from oblique.prompts.base import JudgeOutputError, Prompt, render_papers
 from oblique.prompts.distance import DISTANCE_V1, distance, distance_messages, parse_similarity
 from oblique.prompts.grounding import GROUNDING_V1, grounding, grounding_messages, parse_grounding
-from oblique.prompts.ideation import IDEATION_V2, IDEATION_V3, WORD_LIMITS, ideation_messages
+from oblique.prompts.ideation import (
+    IDEATION_V2,
+    IDEATION_V3,
+    INJECT_V1,
+    WORD_LIMITS,
+    ideation_messages,
+)
 from oblique.prompts.quality import (
     QUALITY_V1,
     QUALITY_V2,
@@ -14,7 +20,16 @@ from oblique.prompts.quality import (
 )
 
 PROMPTS = {
-    p.id: p for p in (IDEATION_V2, IDEATION_V3, QUALITY_V1, QUALITY_V2, DISTANCE_V1, GROUNDING_V1)
+    p.id: p
+    for p in (
+        IDEATION_V2,
+        IDEATION_V3,
+        INJECT_V1,
+        QUALITY_V1,
+        QUALITY_V2,
+        DISTANCE_V1,
+        GROUNDING_V1,
+    )
 }
 
 __all__ = [
@@ -22,6 +37,7 @@ __all__ = [
     "GROUNDING_V1",
     "IDEATION_V2",
     "IDEATION_V3",
+    "INJECT_V1",
     "PROMPTS",
     "QUALITY_V1",
     "QUALITY_V2",

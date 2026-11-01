@@ -133,17 +133,30 @@ class Stats:
 
 
 class ConcurrencyLimiter:
-    """Bounds calls in flight. If `adaptive`, a 429 halves the limit (floor 1); it never rises.
+    """Bounds calls in flight. If `adaptive`, a 429 halves the limit (floor 1), and with a
+    `max_limit` every `raise_after` straight successes add 1, up to that ceiling.
 
     `epoch` counts reductions. Calls started before a reduction cannot reduce again, so
     one burst of 429s from calls already in flight lowers the limit only once.
     """
 
-    def __init__(self, limit: int, *, adaptive: bool = False):
+    def __init__(
+        self,
+        limit: int,
+        *,
+        adaptive: bool = False,
+        max_limit: int | None = None,
+        raise_after: int = 50,
+    ):
         if limit < 1:
             raise ValueError("limit must be >= 1")
+        if max_limit is not None and max_limit < limit:
+            raise ValueError("max_limit must be >= limit")
         self.limit = limit
         self.adaptive = adaptive
+        self.max_limit = max_limit
+        self.raise_after = raise_after
+        self.successes = 0
         self.epoch = 0
         self.active = 0
         self._cond = asyncio.Condition()
@@ -161,10 +174,23 @@ class ConcurrencyLimiter:
 
     def on_rate_limited(self, epoch: int) -> bool:
         """Report a 429 from a call started at `epoch`. True if the limit went down."""
+        self.successes = 0
         if not self.adaptive or epoch != self.epoch or self.limit == 1:
             return False
         self.limit = max(1, self.limit // 2)
         self.epoch += 1
+        return True
+
+    def on_success(self) -> bool:
+        """Report a successful call. True if the limit went up. Waiting calls see the new
+        limit when this call leaves the limiter, which notifies them."""
+        if not self.adaptive or self.max_limit is None or self.limit >= self.max_limit:
+            return False
+        self.successes += 1
+        if self.successes < self.raise_after:
+            return False
+        self.successes = 0
+        self.limit += 1
         return True
 
 
@@ -181,6 +207,7 @@ class LLMClient:
         *,
         concurrency: int = 8,
         adaptive: bool = False,
+        max_concurrency: int | None = None,
         max_attempts: int = 6,
         wait: wait_base | None = None,
         timeout: float = DEFAULT_TIMEOUT,
@@ -193,7 +220,7 @@ class LLMClient:
         self.timeout = timeout
         self.stats = Stats()
         self._client = client
-        self.limiter = ConcurrencyLimiter(concurrency, adaptive=adaptive)
+        self.limiter = ConcurrencyLimiter(concurrency, adaptive=adaptive, max_limit=max_concurrency)
         self._inflight: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     def _openai(self) -> Any:
@@ -263,6 +290,7 @@ class LLMClient:
                                 self.limiter.limit,
                             )
                         raise
+            self.limiter.on_success()
         response = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw)
         usage = Usage.from_response(response)
         self.cache.put(

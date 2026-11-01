@@ -54,6 +54,12 @@ def draw_words(pool: Sequence[str], n: int = N_CONTROLS) -> list[str]:
     return [pool[i] for i in rng("cards").choice(len(pool), size=n, replace=False)]
 
 
+def pick_controls(ids: Sequence[str], n: int) -> list[str]:
+    """n control card IDs out of `ids`, sorted, drawn with the `cards` seed."""
+    ordered = sorted(ids)
+    return sorted(ordered[i] for i in rng("cards").choice(len(ordered), size=n, replace=False))
+
+
 def control_cards(words: Sequence[str], created: date = CREATED) -> list[Card]:
     return [
         Card(

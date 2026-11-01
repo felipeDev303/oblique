@@ -36,6 +36,7 @@ from typing import Any
 import yaml
 
 from oblique.bench import Instance, load_instances, pick_baseline
+from oblique.deck import Card
 from oblique.generate.records import GenerationRecord, records_from_set, write_jsonl
 from oblique.generate.schema import IdeaCard
 from oblique.generate.validate import filtered_set, parse_set
@@ -130,20 +131,30 @@ class Baseline(Smoke):
     # --- generation -----------------------------------------------------------
 
     async def generate_call(
-        self, client, x: Instance, condition: str, k: int, sample_idx: int, previous=()
+        self,
+        client,
+        x: Instance,
+        condition: str,
+        k: int,
+        sample_idx: int,
+        previous=(),
+        *,
+        card: Card | None = None,
+        params: dict[str, Any] | None = None,
     ):
         gen = self.cfg["generator"]
         ideation = self.prompt("ideation")
-        messages = ideation_messages(x, k, ideation, previous)
+        messages = ideation_messages(x, k, ideation, previous, card.text if card else None)
+        prompt_hash = f"{ideation.hash}+{self.prompt('inject').hash}" if card else ideation.hash
         extra = {"instance": x.id, "condition": condition}
         attempt = 0
         try:
-            c = await self.call(f"gen {condition}", gen, messages, sample_idx=sample_idx,
+            c = await self.call(f"gen {condition}", gen, messages, params, sample_idx,
                                 client=client, extra=extra)  # fmt: skip
             parsed = parse_set(c.content, k)
             if parsed.retryable:  # ADR-006: one retry, json_error only
                 attempt = 1
-                c = await self.call(f"gen {condition} retry", gen, messages, sample_idx=sample_idx,
+                c = await self.call(f"gen {condition} retry", gen, messages, params, sample_idx,
                                     attempt=1, client=client, extra=extra)  # fmt: skip
                 parsed = parse_set(c.content, k)
             call_key, usage = c.key, c.usage
@@ -153,18 +164,29 @@ class Baseline(Smoke):
             parsed, call_key, usage = filtered_set(k), e.key, Usage()
         records = records_from_set(
             parsed,
-            cards=[None] * k,
+            cards=[card.id if card else None] * k,
             run_id=self.run_id,
             instance=x.id,
             condition=condition,
             model=gen["model"],
-            prompt_hash=ideation.hash,
+            prompt_hash=prompt_hash,
             seed=None,
             call_key=call_key,
             usage=usage,
             attempt=attempt,
         )
         self.progress["generations"] += 1
+        return records
+
+    async def generate_sequence(self, client, x: Instance, condition: str):
+        """Sequential set (ADR-009): K = 1 per call, conditioned on the valid ideas so far."""
+        records, previous = [], []
+        for slot in range(K):
+            sample_idx = SEQUENTIAL_SAMPLE_BASE + slot
+            r = (await self.generate_call(client, x, condition, 1, sample_idx, previous))[0]
+            records.append(r.model_copy(update={"slot": slot}))
+            if r.valid:
+                previous = [*previous, r.idea]
         return records
 
     async def generate(self, instances: list[Instance]) -> None:
@@ -181,15 +203,7 @@ class Baseline(Smoke):
             return await self.generate_call(client, x, "C1", K, 0)
 
         async def c1s(x):
-            # Sequential (ADR-009): K = 1 per call, conditioned on the valid ideas so far.
-            records, previous = [], []
-            for slot in range(K):
-                sample_idx = SEQUENTIAL_SAMPLE_BASE + slot
-                r = (await self.generate_call(client, x, "C1s", 1, sample_idx, previous))[0]
-                records.append(r.model_copy(update={"slot": slot}))
-                if r.valid:
-                    previous = [*previous, r.idea]
-            return records
+            return await self.generate_sequence(client, x, "C1s")
 
         makers = {"C0": c0, "C1": c1, "C1s": c1s}
         jobs = {(x.id, c): makers[c](x) for c in self.conditions for x in instances}
@@ -323,7 +337,10 @@ class Baseline(Smoke):
     def judge_client(self, name: str):
         mode = self.cfg["judges"][name]
         return self.new_client(
-            mode["provider"], mode["concurrency"], adaptive=mode.get("adaptive", False)
+            mode["provider"],
+            mode["concurrency"],
+            adaptive=mode.get("adaptive", False),
+            max_concurrency=mode.get("max_concurrency"),
         )
 
     def client_stats(self, client) -> dict[str, Any]:

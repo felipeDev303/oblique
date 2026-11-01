@@ -96,13 +96,19 @@ class Smoke:
         self.judgments: list[dict[str, Any]] = []
         self.notes: dict[str, Any] = {}
         self.spent_usd = 0.0
+        # With `budget.ledger`, spend survives a resume: cached calls cost nothing there, so the
+        # cap would otherwise restart from zero each time.
+        self.ledger = self.out / "ledger.jsonl" if cfg["budget"].get("ledger") else None
+        if self.ledger and self.ledger.exists():
+            lines = self.ledger.read_text("utf-8").splitlines()
+            self.spent_usd = sum(json.loads(line)["cost_usd"] for line in lines)
 
-    def new_client(self, provider: str, concurrency: int = 1, *, adaptive: bool = False):
+    def new_client(self, provider: str, concurrency: int = 1, **kw: Any) -> LLMClient:
         return LLMClient(
             provider,
             self.cache,
             concurrency=concurrency,
-            adaptive=adaptive,
+            **kw,
             client=self.transport,
             wait=self.wait,
         )
@@ -133,6 +139,10 @@ class Smoke:
         )
         cost = 0.0 if c.from_cache else self.cost(c)
         self.spent_usd += cost
+        if self.ledger and not c.from_cache:
+            self.ledger.parent.mkdir(parents=True, exist_ok=True)
+            with self.ledger.open("a", encoding="utf-8", newline="\n") as f:
+                f.write(json.dumps({"key": c.key, "cost_usd": cost, "label": label}) + "\n")
         choice = (c.response.get("choices") or [{}])[0]
         self.calls.append(
             {

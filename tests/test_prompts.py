@@ -46,6 +46,7 @@ IDEA = IdeaCard(
 # Changing a template changes its hash: bump the version (ideation-v4, ...) and update here.
 FROZEN = {
     "ideation-v2": "cbadaa8eb5837db2",
+    "inject-v1": "15e83fa4f5a9ddf6",
     "ideation-v3": "ac302619d59086d2",
     "quality-v1": "a6faec078dabf17b",
     "quality-v2": "6bdf589b7106e1a4",
@@ -121,6 +122,34 @@ def test_sequential_generation_needs_k1_and_a_slot():
         ideation_messages(PAPERS, 3, previous=[IDEA])
     with pytest.raises(ValueError):
         ideation_messages(PAPERS, 1, PROMPTS["ideation-v2"], previous=[IDEA])
+
+
+def test_a_card_goes_after_the_papers_and_before_the_task():
+    user = ideation_messages(PAPERS, 1, card="Study the tail, not the average.")[1]["content"]
+    assert user.startswith("<papers>")
+    papers, rest = user.split("</papers>")
+    assert "Study the tail" not in papers
+    assert rest.startswith(
+        "\n\nBefore writing this idea, apply the following oblique constraint to how you approach "
+        "the documents: «Study the tail, not the average.». Do not mention the constraint in the "
+        "idea.\n\nPropose 1 distinct research idea"
+    )
+
+
+def test_a_card_shares_the_system_and_the_papers_with_a_plain_call():
+    plain, carded = ideation_messages(PAPERS, 1), ideation_messages(PAPERS, 1, card="x")
+    assert plain[0] == carded[0]
+    assert carded[1]["content"].startswith(plain[1]["content"].split("Propose")[0])
+
+
+def test_a_card_comes_after_the_earlier_ideas_of_a_sequence():
+    user = ideation_messages(PAPERS, 1, previous=[IDEA], card="x")[1]["content"]
+    assert user.index("Idea 1:") < user.index("oblique constraint") < user.index("Propose 1")
+
+
+def test_a_card_needs_k1():
+    with pytest.raises(ValueError):
+        ideation_messages(PAPERS, 3, card="x")
 
 
 def test_extra_blocks_enter_the_hash():
