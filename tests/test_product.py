@@ -1,4 +1,4 @@
-"""Bring your papers: limits, the sequential set, sources and privacy. No API calls."""
+"""Bring your papers: limits, sheets, the sequential set, sources and privacy. No API calls."""
 
 import asyncio
 import base64
@@ -7,6 +7,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+import httpx
+import openai
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -14,10 +16,22 @@ from tenacity import wait_none
 
 from oblique.deck import load_deck
 from oblique.deck.controls import DECK_DIR
+from oblique.generate.schema import IdeaCard
 from oblique.product.app import COOKIE, create_app
-from oblique.product.documents import UploadError, clean_name, load_documents, normalize
+from oblique.product.documents import (
+    UploadError,
+    clean_name,
+    load_documents,
+    normalize,
+    parse_sheet,
+)
 from oblique.product.service import ProductService, parse_sources
-from oblique.prompts.product import SYSTEM, pdf_ideation_messages
+from oblique.prompts.product import (
+    IDEA_SYSTEM,
+    SHEET_SYSTEM,
+    document_sheet_messages,
+    idea_messages,
+)
 
 LIMITS = {
     "min_documents": 2,
@@ -69,20 +83,23 @@ PAIR = [("a.pdf", PDF_A), ("b.pdf", PDF_B)]
 DOCUMENTS = load_documents(PAIR, LIMITS)
 
 
-class _Raw:
-    def __init__(self, data):
-        self._data = data
-
-    def model_dump(self):
-        return self._data
-
-
-def reply(number=1, sources=None, tag="x"):
-    sources = (
-        sources
-        if sources is not None
-        else [{"document": number, "quote": "measured seventeen samples"}]
+def sheet_reply(quotes=("measured seventeen samples", "a sentence the paper never wrote")):
+    return json.dumps(
+        {
+            "title": "A title",
+            "summary": "A summary.",
+            "methods": "Some methods.",
+            "limitations": "Some limits.",
+            "evidence": list(quotes),
+        }
     )
+
+
+SHEETS = [parse_sheet(sheet_reply(), d) for d in DOCUMENTS]
+
+
+def idea_reply(tag="x", sources=None):
+    sources = [{"document": 1, "evidence": "E1"}] if sources is None else sources
     idea = {
         "problem_gap": f"[Evidence Gap] gap {tag}",
         "core_claim": f"claim {tag}",
@@ -93,18 +110,44 @@ def reply(number=1, sources=None, tag="x"):
     return json.dumps({"ideas": [idea]})
 
 
+class _Raw:
+    def __init__(self, data):
+        self._data = data
+
+    def model_dump(self):
+        return self._data
+
+
+def filtered():
+    request = httpx.Request("POST", "https://api.meta.ai/v1/chat/completions")
+    response = httpx.Response(400, request=request)
+    return openai.BadRequestError("content management policy", response=response, body=None)
+
+
 class FakeAPI:
-    def __init__(self, content=None, tokens=(1000, 0, 500)):
+    """`sheet` and `idea` take the number of the call of that kind and may return text, None for
+    the default reply, or an exception to raise."""
+
+    def __init__(self, sheet=None, idea=None, tokens=(1000, 0, 500)):
         self.chat = self.completions = self
         self.requests = []
-        self.content = content
+        self.sheet = sheet
+        self.idea = idea
         self.tokens = tokens
+
+    def of(self, system):
+        return [r for r in self.requests if r["messages"][0]["content"] == system]
 
     async def create(self, **request):
         self.requests.append(request)
-        content = self.content(len(self.requests)) if self.content else None
-        if content is None:
-            content = reply(tag=str(len(self.requests)))
+        if request["messages"][0]["content"] == SHEET_SYSTEM:
+            n = len(self.of(SHEET_SYSTEM))
+            content = self.sheet(n) if self.sheet else None
+            content = sheet_reply() if content is None else content
+        else:
+            n = len(self.of(IDEA_SYSTEM))
+            content = self.idea(n) if self.idea else None
+            content = idea_reply(str(n)) if content is None else content
         if isinstance(content, Exception):
             raise content
         prompt, cached, completion = self.tokens
@@ -130,6 +173,7 @@ def cfg(tmp_path):
             "provider": "meta",
             "model": "muse-spark-1.3",
             "params": {"temperature": 1.0, "response_format": {"type": "json_object"}},
+            "sheet_params": {"temperature": 0, "response_format": {"type": "json_object"}},
             "timeout_seconds": 10,
             "max_attempts": 1,
         },
@@ -139,9 +183,9 @@ def cfg(tmp_path):
     }
 
 
-def run_set(service, session="s"):
+def run_set(service, session="s", documents=DOCUMENTS):
     async def go():
-        job = service.start(session, DOCUMENTS)
+        job = service.start(session, documents)
         await job.task
         return job
 
@@ -158,7 +202,7 @@ def run_set(service, session="s"):
         ([(f"{i}.pdf", make_pdf(f"text {i}")) for i in range(6)], "between 2 and 5"),
         ([("a.pdf", PDF_A), ("b.txt", b"hello")], "not a PDF"),
         ([("a.pdf", PDF_A), ("copy.pdf", PDF_A)], "uploaded twice"),
-        ([("a.pdf", PDF_A), ("long.pdf", make_pdf("x", pages=4))], "4 pages"),
+        ([("a.pdf", PDF_A), ("long.pdf", make_pdf("x", pages=4))], "4 pages; the limit is 3"),
         ([("a.pdf", PDF_A), ("big.pdf", b"%PDF-" + b"0" * 1_000_001)], "larger than 1 MB"),
         ([("a.pdf", PDF_A), ("broken.pdf", b"%PDF-1.4 not really")], "could not be read"),
     ],
@@ -184,68 +228,120 @@ def test_normalize_joins_hyphenated_lines_and_ignores_case_and_spacing():
     assert normalize("A meas-\n ured   Value\nhere") == "a measured value here"
 
 
-# --- prompt ---------------------------------------------------------------------------------
+# --- prompts --------------------------------------------------------------------------------
 
 
-def test_files_come_first_with_neutral_names_then_the_task():
-    from oblique.generate.schema import IdeaCard
-
-    earlier = IdeaCard(problem_gap="g", core_claim="earlier claim", method="m", inspiration="i")
-    system, user = pdf_ideation_messages([b"one", b"two"], [earlier], "A card.")
-    assert system["content"] == SYSTEM
-    first, second, text = user["content"]
-    assert first["type"] == second["type"] == "file"
-    assert first["file"]["filename"] == "document-1.pdf"
-    assert second["file"]["file_data"] == (
-        "data:application/pdf;base64," + base64.b64encode(b"two").decode()
+def test_a_sheet_call_carries_one_pdf_with_a_neutral_name():
+    system, user = document_sheet_messages(b"one")
+    assert system["content"] == SHEET_SYSTEM
+    part, text = user["content"]
+    assert part["type"] == "file" and text["type"] == "text"
+    assert part["file"]["filename"] == "document.pdf"
+    assert part["file"]["file_data"] == (
+        "data:application/pdf;base64," + base64.b64encode(b"one").decode()
     )
-    assert "Document 1 to Document 2" in text["text"]
-    assert "«A card.»" in text["text"]
-    assert text["text"].index("earlier claim") < text["text"].index("«A card.»")
+
+
+def test_an_idea_call_reads_sheets_earlier_ideas_and_the_card_but_no_pdf():
+    earlier = IdeaCard(problem_gap="g", core_claim="earlier claim", method="m", inspiration="i")
+    system, user = idea_messages(SHEETS, [earlier], "A card.")
+    assert system["content"] == IDEA_SYSTEM
+    text = user["content"]
+    assert isinstance(text, str) and "application/pdf" not in text
+    assert '<document id="2">' in text and 'E1: "measured seventeen samples"' in text
+    assert text.index("</documents>") < text.index("earlier claim") < text.index("«A card.»")
+
+
+# --- sheets ---------------------------------------------------------------------------------
+
+
+def test_a_sheet_numbers_its_evidence_and_checks_each_quote_in_the_pdf():
+    sheet = parse_sheet(sheet_reply(("Measured  SEVENTEEN samples", "never written")), DOCUMENTS[0])
+    assert [(e.id, e.found) for e in sheet.evidence] == [("E1", True), ("E2", False)]
+    assert sheet.name == "a.pdf" and sheet.number == 1
+
+
+def test_a_sheet_keeps_at_most_ten_quotes():
+    sheet = parse_sheet(sheet_reply([f"quote {i}" for i in range(15)]), DOCUMENTS[0])
+    assert len(sheet.evidence) == 10
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        "not json",
+        "[]",
+        '{"title": "t"}',
+        sheet_reply(()),
+        sheet_reply(("   ",)),
+        json.dumps(
+            {"title": "t", "summary": " ", "methods": "", "limitations": "", "evidence": ["q"]}
+        ),
+    ],
+)
+def test_a_reply_that_breaks_the_contract_is_no_sheet(content):
+    assert parse_sheet(content, DOCUMENTS[0]) is None
 
 
 # --- sources --------------------------------------------------------------------------------
 
 
-def test_sources_are_matched_to_documents_and_quotes_checked():
+def test_sources_resolve_to_the_evidence_of_the_sheets():
     parsed = parse_sources(
-        reply(
+        idea_reply(
             sources=[
-                {"document": 1, "quote": "Measured  SEVENTEEN samples"},
-                {"document": 2, "quote": "a sentence the paper never wrote"},
-                {"document": 9, "quote": "no such document"},
-                {"document": True, "quote": "boolean number"},
+                {"document": 1, "evidence": "E1"},
+                {"document": 2, "evidence": "E2"},
+                {"document": 9, "evidence": "E1"},
+                {"document": 1, "evidence": "E99"},
+                {"document": True, "evidence": "E1"},
                 {"document": 1},
                 "not an object",
             ]
         ),
-        DOCUMENTS,
+        SHEETS,
     )
-    assert [(s["name"], s["found"]) for s in parsed["sources"]] == [
-        ("a.pdf", True),
-        ("b.pdf", False),
+    assert [(s["name"], s["evidence"], s["found"]) for s in parsed["sources"]] == [
+        ("a.pdf", "E1", True),
+        ("b.pdf", "E2", False),
     ]
-    assert parsed["rejected"] == 4
+    assert parsed["sources"][0]["quote"] == "measured seventeen samples"
+    assert parsed["rejected"] == 5
 
 
 @pytest.mark.parametrize("content", [None, "not json", '{"ideas": []}', '{"ideas": [{}]}'])
 def test_a_reply_without_sources_has_none(content):
-    assert parse_sources(content, DOCUMENTS) == {"sources": [], "rejected": 0}
+    assert parse_sources(content, SHEETS) == {"sources": [], "rejected": 0}
 
 
 # --- a set ----------------------------------------------------------------------------------
 
 
-def test_a_set_has_three_distinct_cards_and_each_call_sees_the_earlier_ideas(cfg):
+def test_each_pdf_goes_in_its_own_call_and_the_ideas_see_only_sheets(cfg):
     api = FakeAPI()
-    service = ProductService(cfg, transport=api, wait=wait_none())
-    job = run_set(service)
+    job = run_set(ProductService(cfg, transport=api, wait=wait_none()))
     assert job.status == "done"
-    assert len(api.requests) == 3
+    sheets, ideas = api.of(SHEET_SYSTEM), api.of(IDEA_SYSTEM)
+    assert len(sheets) == 2 and len(ideas) == 3
+    sent = set()
+    for request in sheets:
+        files = [p for p in request["messages"][1]["content"] if p["type"] == "file"]
+        assert len(files) == 1
+        sent.add(files[0]["file"]["file_data"])
+    assert len(sent) == 2
+    assert all(isinstance(r["messages"][1]["content"], str) for r in ideas)
+    assert all(data not in json.dumps(ideas) for data in sent)
+    assert [s["name"] for s in job.sheets] == ["a.pdf", "b.pdf"]
+
+
+def test_a_set_has_three_distinct_cards_and_each_idea_sees_the_earlier_ones(cfg):
+    api = FakeAPI()
+    job = run_set(ProductService(cfg, transport=api, wait=wait_none()))
     assert len({i["card"]["id"] for i in job.ideas}) == 3
     deck = load_deck(DECK_DIR)
     assert all(i["card"]["text"] == deck[i["card"]["id"]].text for i in job.ideas)
-    texts = [r["messages"][1]["content"][-1]["text"] for r in api.requests]
+    texts = [r["messages"][1]["content"] for r in api.of(IDEA_SYSTEM)]
     assert "claim 1" not in texts[0]
     assert "claim 1" in texts[1] and "claim 2" not in texts[1]
     assert "claim 1" in texts[2] and "claim 2" in texts[2]
@@ -254,26 +350,47 @@ def test_a_set_has_three_distinct_cards_and_each_call_sees_the_earlier_ideas(cfg
     assert job.ideas[0]["idea"]["core_claim"] == "claim 1"
 
 
+def test_sheets_and_ideas_use_their_own_parameters(cfg):
+    api = FakeAPI()
+    run_set(ProductService(cfg, transport=api, wait=wait_none()))
+    assert all(r["temperature"] == 0 for r in api.of(SHEET_SYSTEM))
+    assert all(r["temperature"] == 1.0 for r in api.of(IDEA_SYSTEM))
+
+
+def test_a_broken_sheet_is_retried_once(cfg):
+    api = FakeAPI(sheet=lambda n: "not json" if n == 1 else None)
+    job = run_set(ProductService(cfg, transport=api, wait=wait_none()))
+    assert job.status == "done" and len(api.of(SHEET_SYSTEM)) == 3
+
+
+def test_a_document_without_a_sheet_stops_the_set_and_refunds_it(cfg):
+    api = FakeAPI(sheet=lambda n: "not json")
+    service = ProductService(cfg, transport=api, wait=wait_none())
+    job = run_set(service)
+    assert job.status == "failed" and "could not be read into a sheet" in job.message
+    assert api.of(IDEA_SYSTEM) == []
+    assert service.session("s").sets_started == 0
+
+
+def test_a_filtered_document_is_named_and_no_idea_is_written(cfg):
+    api = FakeAPI(sheet=lambda n: filtered())
+    job = run_set(ProductService(cfg, transport=api, wait=wait_none()))
+    assert job.status == "failed" and "content filter refused a.pdf" in job.message
+    assert api.of(IDEA_SYSTEM) == []
+
+
 def test_invalid_and_filtered_ideas_are_shown_and_the_set_goes_on(cfg):
-    import httpx
-    import openai
-
-    def error():
-        request = httpx.Request("POST", "https://api.meta.ai/v1/chat/completions")
-        response = httpx.Response(400, request=request)
-        return openai.BadRequestError("content management policy", response=response, body=None)
-
-    # Call 1 and 2: filtered twice. Call 3: not JSON. Call 4: not JSON again. Call 5: fine.
-    script = {1: error(), 2: error(), 3: "nope", 4: "nope"}
-    api = FakeAPI(content=lambda n: script.get(n))
+    # Calls 1 and 2: filtered twice. Calls 3 and 4: not JSON twice. Call 5: fine.
+    script = {1: filtered(), 2: filtered(), 3: "nope", 4: "nope"}
+    api = FakeAPI(idea=lambda n: script.get(n))
     job = run_set(ProductService(cfg, transport=api, wait=wait_none()))
     assert [i["status"] for i in job.ideas] == ["filtered", "invalid", "ok"]
     assert job.status == "done"
-    assert "[Evidence Gap]" not in api.requests[-1]["messages"][1]["content"][-1]["text"]
+    assert "[Evidence Gap]" not in api.of(IDEA_SYSTEM)[-1]["messages"][1]["content"]
 
 
 def test_a_failed_call_is_reported_without_details_and_refunds_the_set(cfg):
-    api = FakeAPI(content=lambda n: RuntimeError("secret detail"))
+    api = FakeAPI(idea=lambda n: RuntimeError("secret detail"))
     service = ProductService(cfg, transport=api, wait=wait_none())
     job = run_set(service)
     assert job.status == "failed"
@@ -293,10 +410,11 @@ def test_contributor_and_control_decks_are_refused(cfg):
         ProductService(bad, transport=FakeAPI())
 
 
-def test_the_committed_config_uses_standard_and_a_valid_deck():
+def test_the_committed_config_uses_standard_fifty_pages_and_a_valid_deck():
     cfg = yaml.safe_load(Path("configs/product.yaml").read_text("utf-8"))
     assert cfg["generator"]["model"] == "muse-spark-1.3"
     assert (cfg["limits"]["min_documents"], cfg["limits"]["max_documents"]) == (2, 5)
+    assert cfg["limits"]["max_pages_per_document"] == 50
     deck = load_deck(DECK_DIR)
     assert all(deck[c].origin == "seed" for c in cfg["deck"]["cards"])
 
@@ -313,50 +431,47 @@ def test_session_limit_counts_per_session(cfg):
     assert run_set(service, "other").status == "done"
 
 
-def test_cost_is_recorded_and_the_budget_survives_a_restart(cfg):
+def test_the_same_pdf_pays_for_its_sheet_only_once(cfg):
+    api = FakeAPI()
+    service = ProductService(cfg, transport=api, wait=wait_none())
+    run_set(service, "s")
+    run_set(service, "s")
+    assert len(api.of(SHEET_SYSTEM)) == 2
+
+
+def test_cost_is_recorded_by_kind_and_the_budget_survives_a_restart(cfg):
     api = FakeAPI(tokens=(1000, 200, 500))
     service = ProductService(cfg, transport=api, wait=wait_none())
     run_set(service)
     per_call = (800 * 1.25 + 200 * 0.15 + 500 * 4.25) / 1e6
-    assert service.spent_usd == pytest.approx(3 * per_call)
-    assert service.session("s").spent_usd == pytest.approx(3 * per_call)
+    assert service.spent_usd == pytest.approx(5 * per_call)
+    assert service.session("s").spent_usd == pytest.approx(5 * per_call)
+    rows = [json.loads(line) for line in Path(cfg["ledger"]).read_text("utf-8").splitlines()]
+    assert [r["kind"] for r in rows].count("sheet") == 2
+    assert [r["kind"] for r in rows].count("idea") == 3
 
-    limited = {**cfg, "limits": {**LIMITS, "budget_usd": 3 * per_call}}
+    limited = {**cfg, "limits": {**LIMITS, "budget_usd": 5 * per_call}}
     restarted = ProductService(limited, transport=api, wait=wait_none())
-    assert restarted.spent_usd == pytest.approx(3 * per_call)
+    assert restarted.spent_usd == pytest.approx(5 * per_call)
     with pytest.raises(Exception, match="budget"):
         run_set(restarted, "new")
 
 
-def test_the_session_spending_limit_stops_a_set_in_the_middle(cfg):
+def test_the_session_spending_limit_stops_a_set_before_more_calls(cfg):
     limited = {**cfg, "limits": {**LIMITS, "session_usd": 0.0001}}
     api = FakeAPI()
     job = run_set(ProductService(limited, transport=api, wait=wait_none()))
     assert job.status == "limit"
-    assert len(api.requests) == 1
-    assert [i["status"] for i in job.ideas] == ["ok"]
+    assert api.of(IDEA_SYSTEM) == []
+    assert job.ideas == []
 
 
-def test_cached_calls_are_free_and_no_pdf_reaches_the_disk(cfg):
-    api = FakeAPI()
-    service = ProductService(cfg, transport=api, wait=wait_none())
-    messages = pdf_ideation_messages([d.data for d in DOCUMENTS], (), "A card.")
-
-    async def twice():
-        session = service.session("s")
-        await service.call(session, messages, 0)
-        spent = service.spent_usd
-        await service.call(session, messages, 0)
-        return spent
-
-    assert asyncio.run(twice()) == pytest.approx(service.spent_usd)
-    assert len(api.requests) == 1
+def test_no_pdf_reaches_the_disk(cfg):
+    run_set(ProductService(cfg, transport=FakeAPI(), wait=wait_none()))
     encoded = base64.b64encode(PDF_A).decode()
     with sqlite3.connect(cfg["cache"]) as db:
         rows = db.execute("SELECT request, response FROM cache").fetchall()
-    assert rows and all(
-        encoded not in request and encoded not in response for request, response in rows
-    )
+    assert rows and all(encoded not in req and encoded not in resp for req, resp in rows)
     assert encoded not in Path(cfg["ledger"]).read_text("utf-8")
 
 
@@ -393,8 +508,21 @@ def test_upload_then_poll_until_the_set_is_done(cfg):
         assert started.status_code == 202
         body = wait_done(client, started.json()["id"])
         assert body["status"] == "done" and len(body["ideas"]) == 3
+        assert body["phase"] == "ideas" and len(body["sheets"]) == 2
         assert body["documents"][0]["name"] == "a.pdf"
         assert client.get("/api/status").json()["sets_left"] == 1
+
+
+def test_a_pdf_past_the_page_limit_is_refused_with_no_call_and_no_charge(cfg):
+    api = FakeAPI()
+    long_paper = [("a.pdf", PDF_A), ("long.pdf", make_pdf("x", pages=4))]
+    with TestClient(create_app(cfg, transport=api, wait=wait_none())) as client:
+        response = upload(client, long_paper)
+        assert response.status_code == 400
+        assert response.json()["detail"] == "long.pdf: 4 pages; the limit is 3 per document."
+        assert client.get("/api/status").json()["sets_left"] == 2
+    assert api.requests == []
+    assert not Path(cfg["ledger"]).exists()
 
 
 def test_a_bad_upload_is_a_400_and_does_not_use_a_set(cfg):

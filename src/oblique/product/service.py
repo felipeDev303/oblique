@@ -1,4 +1,8 @@
-"""The flow behind the page: limits, a sequential set under three cards, visible sources.
+"""The flow behind the page: limits, one sheet per PDF, a sequential set under three cards.
+
+Each PDF goes in its own call and becomes a sheet (title, summary, methods, limitations, quoted
+evidence). The ideas are written over the sheets and never see a PDF, so the cost of a set grows
+with one read per document, not with three reads of every document.
 
 No judges and no metrics: the same generation core as the experiment, on the user's documents.
 Sets are generated with the Standard model, never Contributor, which would let Meta use the
@@ -7,8 +11,8 @@ user's PDFs for training.
 The session limit counts sets per browser cookie, so clearing cookies resets it. The budget in
 the persistent ledger is what really protects the credits.
 
-The local response cache keeps every response, as in the rest of the project, but its copy of the
-request is reduced to the model name, so the PDFs are never written to disk.
+The local response cache keeps every response, sheets included, as in the rest of the project, but
+its copy of the request is reduced to the model name, so the PDFs are never written to disk.
 """
 
 from __future__ import annotations
@@ -28,8 +32,13 @@ from oblique.deck.controls import DECK_DIR
 from oblique.generate.schema import IdeaCard
 from oblique.generate.validate import parse_set, unfence
 from oblique.llm import Completion, ContentFilteredError, LLMClient
-from oblique.product.documents import Document, normalize
-from oblique.prompts.product import IDEATION_PDF_V1, pdf_ideation_messages
+from oblique.product.documents import Document, Sheet, parse_sheet
+from oblique.prompts.product import (
+    DOCUMENT_SHEET_V1,
+    IDEATION_SHEETS_V1,
+    document_sheet_messages,
+    idea_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +54,10 @@ class Busy(Exception):
     """Too many sets are being generated right now."""
 
 
+class SheetFailed(Exception):
+    """A document that produced no sheet. The message is safe to show to the user."""
+
+
 class DocumentCache(Cache):
     """Stores the response under the same key, without the request and the PDFs inside it."""
 
@@ -52,28 +65,36 @@ class DocumentCache(Cache):
         super().put(key, model=model, request={"model": model, "stored": False}, **kw)
 
 
-def parse_sources(content: str | None, documents: list[Document]) -> dict[str, Any]:
-    """The sources of a K = 1 reply. A source naming no uploaded document is dropped and counted;
-    `found` says whether the quote is in the text extracted locally from that PDF. A quote that is
-    not found may still be real (scanned pages, odd extraction), so the page shows it as unchecked,
-    not as false."""
+def parse_sources(content: str | None, sheets: list[Sheet]) -> dict[str, Any]:
+    """The sources of a K = 1 reply, resolved to the evidence of the sheets. A source that names no
+    such document or passage is dropped and counted: only a passage from a sheet can be shown."""
     try:
         items = json.loads(unfence(content or "")[0])["ideas"][0]["sources"]
     except (json.JSONDecodeError, KeyError, IndexError, TypeError):
         return {"sources": [], "rejected": 0}
     if not isinstance(items, list):
         return {"sources": [], "rejected": 0}
-    by_number = {d.number: d for d in documents}
+    by_number = {s.number: s for s in sheets}
     sources, rejected = [], 0
     for item in items:
         number = item.get("document") if isinstance(item, dict) else None
-        quote = item.get("quote") if isinstance(item, dict) else None
-        if isinstance(number, bool) or number not in by_number or not isinstance(quote, str):
+        evidence = item.get("evidence") if isinstance(item, dict) else None
+        sheet = None
+        if not isinstance(number, bool) and isinstance(number, int):
+            sheet = by_number.get(number)
+        passage = next((e for e in sheet.evidence if e.id == evidence), None) if sheet else None
+        if passage is None:
             rejected += 1
             continue
-        document = by_number[number]
-        found = bool(quote.strip()) and normalize(quote) in document.text
-        sources.append({"document": number, "name": document.name, "quote": quote, "found": found})
+        sources.append(
+            {
+                "document": number,
+                "name": sheet.name,
+                "evidence": passage.id,
+                "quote": passage.quote,
+                "found": passage.found,
+            }
+        )
     return {"sources": sources, "rejected": rejected}
 
 
@@ -90,6 +111,8 @@ class Job:
     cards: list[Card]
     documents: list[dict[str, Any]]
     status: str = "running"  # running | done | limit | failed
+    phase: str = "reading"  # reading | ideas
+    sheets: list[dict[str, Any]] = field(default_factory=list)
     ideas: list[dict[str, Any]] = field(default_factory=list)
     message: str | None = None
     task: asyncio.Task | None = None
@@ -98,9 +121,11 @@ class Job:
         return {
             "id": self.id,
             "status": self.status,
+            "phase": self.phase,
             "message": self.message,
             "documents": self.documents,
             "k": len(self.cards),
+            "sheets": self.sheets,
             "ideas": self.ideas,
         }
 
@@ -121,7 +146,7 @@ class ProductService:
         self.client = LLMClient(
             gen["provider"],
             DocumentCache(cfg["cache"]),
-            concurrency=self.limits["max_running_sets"] * 2,
+            concurrency=self.limits["max_running_sets"] * self.limits["max_documents"],
             max_attempts=gen["max_attempts"],
             timeout=gen["timeout_seconds"],
             client=transport,
@@ -187,12 +212,15 @@ class ProductService:
         return job
 
     async def call(
-        self, session: Session, messages: list[dict[str, Any]], attempt: int
+        self,
+        session: Session,
+        kind: str,
+        messages: list[dict[str, Any]],
+        params: dict[str, Any],
+        attempt: int,
     ) -> Completion:
         self.check_budget(session)
-        c = await self.client.complete(
-            self.gen["model"], messages, params=self.gen["params"], attempt=attempt
-        )
+        c = await self.client.complete(self.gen["model"], messages, params=params, attempt=attempt)
         if not c.from_cache:
             u = c.usage
             cost = (
@@ -202,26 +230,63 @@ class ProductService:
             ) / 1e6
             self.spent_usd += cost
             session.spent_usd += cost
+            prompt = DOCUMENT_SHEET_V1 if kind == "sheet" else IDEATION_SHEETS_V1
+            row = {
+                "key": c.key,
+                "kind": kind,
+                "prompt_hash": prompt.hash,
+                "tokens_in": u.tokens_in,
+                "tokens_cached": u.tokens_cached,
+                "tokens_out": u.tokens_out,
+                "tokens_reasoning": u.tokens_reasoning,
+                "cost_usd": cost,
+            }
             self.ledger.parent.mkdir(parents=True, exist_ok=True)
             with self.ledger.open("a", encoding="utf-8", newline="\n") as f:
-                row = {"key": c.key, "cost_usd": cost, "prompt_hash": IDEATION_PDF_V1.hash}
                 f.write(json.dumps(row) + "\n")
         return c
+
+    async def read_document(self, session: Session, document: Document) -> Sheet:
+        """One PDF, one call (one retry if the reply breaks the sheet's contract)."""
+        messages = document_sheet_messages(document.data)
+        params = self.gen["sheet_params"]
+        try:
+            c = await self.call(session, "sheet", messages, params, 0)
+            sheet = parse_sheet(c.content, document)
+            if sheet is None:
+                c = await self.call(session, "sheet", messages, params, 1)
+                sheet = parse_sheet(c.content, document)
+        except ContentFilteredError as e:
+            raise SheetFailed(f"The provider's content filter refused {document.name}.") from e
+        if sheet is None:
+            raise SheetFailed(f"{document.name} could not be read into a sheet.")
+        return sheet
+
+    async def read_all(self, session: Session, documents: list[Document]) -> list[Sheet]:
+        """All sheets, or the first failure once every call has finished and been charged."""
+        results = await asyncio.gather(
+            *(self.read_document(session, d) for d in documents), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+        return results
 
     async def one_idea(
         self,
         session: Session,
-        documents: list[Document],
+        sheets: list[Sheet],
         previous: list[IdeaCard],
         card: Card,
     ) -> tuple[dict[str, Any], IdeaCard | None]:
         shown = {"id": card.id, "text": card.text}
-        messages = pdf_ideation_messages([d.data for d in documents], previous, card.text)
+        messages = idea_messages(sheets, previous, card.text)
+        params = self.gen["params"]
         try:
-            c = await self.call(session, messages, 0)
+            c = await self.call(session, "idea", messages, params, 0)
             parsed = parse_set(c.content, 1)
             if parsed.retryable:  # ADR-006: one retry, json_error only
-                c = await self.call(session, messages, 1)
+                c = await self.call(session, "idea", messages, params, 1)
                 parsed = parse_set(c.content, 1)
         except ContentFilteredError:
             return {"card": shown, "status": "filtered"}, None
@@ -233,7 +298,7 @@ class ProductService:
                 "card": shown,
                 "status": "ok",
                 "idea": slot.idea.model_dump(),
-                **parse_sources(c.content, documents),
+                **parse_sources(c.content, sheets),
             },
             slot.idea,
         )
@@ -241,14 +306,20 @@ class ProductService:
     async def run(self, job: Job, session: Session, documents: list[Document]) -> None:
         previous: list[IdeaCard] = []
         try:
+            sheets = await self.read_all(session, documents)
+            job.sheets = [s.public() for s in sheets]
+            job.phase = "ideas"
             for card in job.cards:
-                shown, idea = await self.one_idea(session, documents, previous, card)
+                shown, idea = await self.one_idea(session, sheets, previous, card)
                 job.ideas.append(shown)
                 if idea is not None:
                     previous = [*previous, idea]
             job.status = "done"
         except LimitReached as e:
             job.status, job.message = "limit", str(e)
+        except SheetFailed as e:
+            job.status, job.message = "failed", str(e)
+            session.sets_started -= 1  # nothing delivered: it does not count against the user
         except Exception:
             logger.exception("set %s failed", job.id)
             job.status, job.message = "failed", "The model call failed. Please try again."

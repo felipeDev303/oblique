@@ -1,8 +1,9 @@
-"""Checks on uploaded PDFs, before anything reaches the model.
+"""Uploaded PDFs and their sheets.
 
-The limits protect the credits: the provider reads the text of up to 100 pages per PDF, so page
-count, not file size, is what sets the cost of a call. Documents live in memory only for the set
-being generated. Their local text is used only to look for the quotes the model cites.
+Upload limits come first: page count, not file size, is what sets the cost of a call. A PDF past
+the page limit is refused whole, with no call and no charge, so the reader knows it was not read.
+Documents live in memory only for the set being generated. Their local text is used only to look
+for the quotes of each sheet.
 """
 
 from __future__ import annotations
@@ -13,8 +14,14 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, StrictStr, ValidationError, field_validator
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
+
+from oblique.prompts import JudgeOutputError
+from oblique.prompts.base import parse_json_object
+
+MAX_EVIDENCE = 10
 
 
 class UploadError(ValueError):
@@ -28,6 +35,52 @@ class Document:
     data: bytes
     pages: int
     text: str
+
+
+@dataclass(frozen=True)
+class Evidence:
+    id: str
+    quote: str
+    found: bool  # the quote is in the text extracted locally from the PDF
+
+
+@dataclass(frozen=True)
+class Sheet:
+    number: int
+    name: str
+    title: str
+    summary: str
+    methods: str
+    limitations: str
+    evidence: tuple[Evidence, ...]
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "document": self.number,
+            "name": self.name,
+            "title": self.title,
+            "summary": self.summary,
+            "methods": self.methods,
+            "limitations": self.limitations,
+            "evidence": [vars(e) for e in self.evidence],
+        }
+
+
+class SheetReply(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    title: StrictStr
+    summary: StrictStr
+    methods: StrictStr
+    limitations: StrictStr
+    evidence: list[StrictStr]
+
+    @field_validator("title", "summary")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("field is empty or whitespace only")
+        return v
 
 
 def clean_name(name: str | None, number: int) -> str:
@@ -80,3 +133,26 @@ def load_documents(files: list[tuple[str | None, bytes]], limits: dict[str, Any]
         pages, text = read_pdf(data, shown, limits["max_pages_per_document"])
         documents.append(Document(number, shown, data, pages, text))
     return documents
+
+
+def parse_sheet(content: str | None, document: Document) -> Sheet | None:
+    """The sheet of a reply, or None if it breaks the contract. A quote not found in the local text
+    stays, marked: it may be real (scanned pages, odd extraction)."""
+    try:
+        reply = SheetReply.model_validate(parse_json_object(content))
+    except (JudgeOutputError, ValidationError):
+        return None
+    quotes = [q for q in reply.evidence if q.strip()][:MAX_EVIDENCE]
+    if not quotes:
+        return None
+    return Sheet(
+        number=document.number,
+        name=document.name,
+        title=reply.title,
+        summary=reply.summary,
+        methods=reply.methods,
+        limitations=reply.limitations,
+        evidence=tuple(
+            Evidence(f"E{i}", q, normalize(q) in document.text) for i, q in enumerate(quotes, 1)
+        ),
+    )

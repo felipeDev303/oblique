@@ -52,7 +52,8 @@ FROZEN = {
     "quality-v2": "6bdf589b7106e1a4",
     "distance-v1": "28a29c13b725e007",
     "grounding-v1": "b8fdc3ca41e79408",
-    "ideation-pdf-v1": "cb80c0982e7b0e2a",
+    "document-sheet-v1": "5a859e9d4a7ba6cd",
+    "ideation-sheets-v1": "2a1d39776042a345",
 }
 
 
