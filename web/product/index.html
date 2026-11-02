@@ -111,7 +111,7 @@ async function poll(id) {
   }
   if (job.status === "running") {
     $("progress").textContent = job.phase === "reading"
-      ? `Reading ${job.documents.length} documents, one call each.`
+      ? `Reading ${job.documents.length} documents, one at a time.`
       : `Writing idea ${shown + 1} of ${job.k}. Each one takes about a minute.`;
     setTimeout(() => poll(id).catch(fail), 2000);
     return;

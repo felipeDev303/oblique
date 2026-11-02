@@ -457,13 +457,46 @@ def test_cost_is_recorded_by_kind_and_the_budget_survives_a_restart(cfg):
         run_set(restarted, "new")
 
 
-def test_the_session_spending_limit_stops_a_set_before_more_calls(cfg):
+def test_sheets_are_read_one_at_a_time_in_upload_order(cfg):
+    class Tracking(FakeAPI):
+        in_flight = 0
+        most = 0
+
+        async def create(self, **request):
+            type(self).in_flight += 1
+            type(self).most = max(self.most, self.in_flight)
+            await asyncio.sleep(0)
+            try:
+                return await super().create(**request)
+            finally:
+                type(self).in_flight -= 1
+
+    api = Tracking()
+    run_set(ProductService(cfg, transport=api, wait=wait_none()))
+    assert Tracking.most == 1
+    sent = [r["messages"][1]["content"][0]["file"]["file_data"] for r in api.of(SHEET_SYSTEM)]
+    assert sent == [
+        "data:application/pdf;base64," + base64.b64encode(d.data).decode() for d in DOCUMENTS
+    ]
+
+
+def test_the_session_spending_limit_stops_between_sheets(cfg):
     limited = {**cfg, "limits": {**LIMITS, "session_usd": 0.0001}}
     api = FakeAPI()
     job = run_set(ProductService(limited, transport=api, wait=wait_none()))
     assert job.status == "limit"
+    assert len(api.of(SHEET_SYSTEM)) == 1
     assert api.of(IDEA_SYSTEM) == []
-    assert job.ideas == []
+    assert job.sheets == [] and job.ideas == []
+
+
+def test_the_budget_stops_between_sheets_and_survives_in_the_ledger(cfg):
+    limited = {**cfg, "limits": {**LIMITS, "budget_usd": 0.0001}}
+    api = FakeAPI()
+    service = ProductService(limited, transport=api, wait=wait_none())
+    assert run_set(service).status == "limit"
+    assert len(api.of(SHEET_SYSTEM)) == 1
+    assert len(Path(cfg["ledger"]).read_text("utf-8").splitlines()) == 1
 
 
 def test_no_pdf_reaches_the_disk(cfg):

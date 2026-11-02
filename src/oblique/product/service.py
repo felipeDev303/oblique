@@ -146,7 +146,7 @@ class ProductService:
         self.client = LLMClient(
             gen["provider"],
             DocumentCache(cfg["cache"]),
-            concurrency=self.limits["max_running_sets"] * self.limits["max_documents"],
+            concurrency=self.limits["max_running_sets"],
             max_attempts=gen["max_attempts"],
             timeout=gen["timeout_seconds"],
             client=transport,
@@ -263,14 +263,9 @@ class ProductService:
         return sheet
 
     async def read_all(self, session: Session, documents: list[Document]) -> list[Sheet]:
-        """All sheets, or the first failure once every call has finished and been charged."""
-        results = await asyncio.gather(
-            *(self.read_document(session, d) for d in documents), return_exceptions=True
-        )
-        for result in results:
-            if isinstance(result, BaseException):
-                raise result
-        return results
+        """One document at a time: the limits are checked before each call, so a set can pass one
+        only by the cost of the sheet in flight. In parallel, 5 PDFs could all pass it together."""
+        return [await self.read_document(session, d) for d in documents]
 
     async def one_idea(
         self,
