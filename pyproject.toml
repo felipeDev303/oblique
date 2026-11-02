@@ -23,9 +23,16 @@ deck = [
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    {include-group = "product"},
 ]
 embed = [
     "sentence-transformers>=3.0",
+]
+product = [
+    "fastapi>=0.115",
+    "pypdf>=5.0",
+    "python-multipart>=0.0.9",
+    "uvicorn>=0.30",
 ]
 
 [build-system]
