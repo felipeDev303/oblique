@@ -1,5 +1,6 @@
 from oblique.prompts.base import JudgeOutputError, Prompt, render_papers
 from oblique.prompts.distance import DISTANCE_V1, distance, distance_messages, parse_similarity
+from oblique.prompts.evolve import EVOLVE_V1
 from oblique.prompts.grounding import GROUNDING_V1, grounding, grounding_messages, parse_grounding
 from oblique.prompts.ideation import (
     IDEATION_V2,
@@ -29,11 +30,13 @@ PROMPTS = {
         QUALITY_V2,
         DISTANCE_V1,
         GROUNDING_V1,
+        EVOLVE_V1,
     )
 }
 
 __all__ = [
     "DISTANCE_V1",
+    "EVOLVE_V1",
     "GROUNDING_V1",
     "IDEATION_V2",
     "IDEATION_V3",

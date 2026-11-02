@@ -1,0 +1,9 @@
+id: OB-G1-012
+text: "Specify the exact point where a shared term stops applying to both."
+family: ambiguity_specificity
+origin: evolved
+generation: 1
+parents: [OB-023, OB-009]
+opposite_of: []
+author: "muse-wonder-1.0"
+created: 2026-11-01

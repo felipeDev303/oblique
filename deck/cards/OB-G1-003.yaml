@@ -1,0 +1,9 @@
+id: OB-G1-003
+text: "Treat each document's caveat as positive evidence for the other's claim."
+family: inversion
+origin: evolved
+generation: 1
+parents: [E6-2, OB-008]
+opposite_of: []
+author: "muse-wonder-1.0"
+created: 2026-11-01

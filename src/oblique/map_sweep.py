@@ -283,6 +283,10 @@ class MapSweep(LengthCheck):
             "method_off_or_missing": sum(r.method_label_status in off for r in records) / n,
         }
 
+    def regression_extra(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """Rows and conditions fitted jointly with this run's, but not reported."""
+        return [], []
+
     def report(self, instances: list[Instance]) -> dict[str, Any]:
         d_emb = self.embeddings()
         values = {
@@ -298,9 +302,11 @@ class MapSweep(LengthCheck):
         def ci_or_none(data: list[float]) -> dict[str, float | int] | None:
             return ci_dict(bootstrap_mean_ci(data, n_boot=n_boot)) if data else None
 
+        self.current_rows = self.regression_rows(values)
+        extra_rows, extra_conditions = self.regression_extra()
         controlled = controlled_win_rates(
-            self.regression_rows(values),
-            self.conditions,
+            [*self.current_rows, *extra_rows],
+            [*self.conditions, *extra_conditions],
             comparisons=self.comparisons(),
             n_boot=n_boot,
         )
@@ -500,6 +506,12 @@ class MapSweep(LengthCheck):
 
     # --- run ------------------------------------------------------------------
 
+    def check_reference_cached(self, instances: list[Instance]) -> None:
+        """A run that must reuse earlier draws refuses to start without them."""
+
+    def write_summary(self, result: dict[str, Any]) -> None:
+        (self.out / "summary.md").write_text(render_summary(result), "utf-8", newline="\n")
+
     async def run(self) -> None:
         self.out.mkdir(parents=True, exist_ok=True)
         (self.out / "config.yaml").write_text(yaml.safe_dump(self.cfg, sort_keys=False), "utf-8")
@@ -507,6 +519,7 @@ class MapSweep(LengthCheck):
             await self.check_models()
             self.check_cards()
             instances = self.instances()
+            self.check_reference_cached(instances)
             await self.generate(instances)
             print("generation done:", dict(self.progress), f"US${self.spent_usd:.3f}", flush=True)
             await self.judge(instances)
@@ -515,7 +528,7 @@ class MapSweep(LengthCheck):
             (self.out / "metrics.json").write_text(
                 json.dumps(result, indent=2, default=str, ensure_ascii=False), "utf-8"
             )
-            (self.out / "summary.md").write_text(render_summary(result), "utf-8", newline="\n")
+            self.write_summary(result)
         finally:
             write_jsonl_dicts(self.out / "judgments.jsonl", self.judge_rows)
             write_jsonl_dicts(self.out / "calls.jsonl", self.calls)
@@ -543,8 +556,17 @@ def render_summary(result: dict[str, Any]) -> str:
         "",
         f"**Liminal confirmed:** {', '.join(result['liminal_confirmed']) or 'none'}.",
         "",
-        f"Values are means with 95% percentile CIs over instances ({ref['n_boot']} resamples), "
-        "uncorrected across cards. Bands per ADR-003. Sorted by m.",
+        *render_table(result),
+    ]
+    return "\n".join(lines)
+
+
+def render_table(result: dict[str, Any]) -> list[str]:
+    """The closing note of a summary and its table, one row per condition, sorted by m."""
+    lines = [
+        f"Values are means with 95% percentile CIs over instances "
+        f"({result['reference']['n_boot']} resamples), uncorrected across cards. "
+        "Bands per ADR-003. Sorted by m.",
         "",
         "| Condition | Band | Δq controlled | q controlled | q raw | Δd | d | m | Grounding "
         "| Invalid | Filtered |",
@@ -558,7 +580,7 @@ def render_summary(result: dict[str, Any]) -> str:
             f"| {_ci(r['d_minus_c2'])} | {_ci(r['d'])} | {_ci(r['m'])} | {_ci(r['grounding'])} "
             f"| {_ci(r['invalid_rate'])} | {_ci(r['filtered_rate'])} |"
         )
-    return "\n".join(lines) + "\n"
+    return [*lines, ""]
 
 
 def main(argv: list[str]) -> None:

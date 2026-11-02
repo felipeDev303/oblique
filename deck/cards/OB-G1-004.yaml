@@ -1,0 +1,9 @@
+id: OB-G1-004
+text: "Read success in one document as failure under the other's standards."
+family: inversion
+origin: evolved
+generation: 1
+parents: [OB-008, OB-026]
+opposite_of: []
+author: "muse-wonder-1.0"
+created: 2026-11-01

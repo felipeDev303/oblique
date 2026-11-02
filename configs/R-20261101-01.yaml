@@ -1,0 +1,24 @@
+# Evolution G1 (ADR-010): one call to Muse Wonder, 15 proposed cards, no measurement.
+# uv run python -m oblique.evolve.g1 configs/R-20261101-01.yaml --dry-run   (prints the prompt)
+# uv run python -m oblique.evolve.g1 configs/R-20261101-01.yaml
+run_id: R-20261101-01
+split: A                     # the map it reads was measured on split A; split B is not touched
+cache: .cache/responses.db
+
+prompts: [evolve-v1]
+map_metrics: runs/R-20261031-01/metrics.json
+n_cards: 15
+created: 2026-11-01
+record_dir: deck/evolution/G1  # the call and its response, verbatim: the agent's record
+
+writer:
+  provider: meta
+  model: muse-wonder-1.0     # Wonder has no Contributor mode
+  params: {max_tokens: 20000}  # no JSON mode: never tested on Wonder; the prompt asks for JSON
+
+budget:
+  approved_usd: 0.50         # max_tokens bounds one attempt at about US$0.42
+  stop_usd: 0.50
+  ledger: true
+  prices_per_m:
+    muse-wonder-1.0: {in: 4.0, cached: 0.20, out: 20.0}   # dev.meta.ai pricing page, 2026-11-01

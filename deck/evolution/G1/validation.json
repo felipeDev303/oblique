@@ -1,0 +1,246 @@
+{
+  "cards": [
+    {
+      "id": "OB-G1-001",
+      "text": "Set aside both conclusions and rebuild from their conflicting evidence.",
+      "family": "subtraction",
+      "parents": [
+        "E6-1",
+        "OB-008"
+      ],
+      "justification": "Removing conclusions rather than evidence forces reframing while the retained conflicting evidence preserves grounding and plausibility.",
+      "words": 10,
+      "closest": {
+        "id": "OB-006",
+        "chars": 0.427,
+        "words": 0.0
+      }
+    },
+    {
+      "id": "OB-G1-002",
+      "text": "Ignore the headline results; connect the secondary observations nobody combines.",
+      "family": "subtraction",
+      "parents": [
+        "OB-011",
+        "OB-025"
+      ],
+      "justification": "Secondary observations are grounded but underused, so combining them across papers should create distance without inventing material.",
+      "words": 10,
+      "closest": {
+        "id": "OB-009",
+        "chars": 0.403,
+        "words": 0.067
+      }
+    },
+    {
+      "id": "OB-G1-003",
+      "text": "Treat each document's caveat as positive evidence for the other's claim.",
+      "family": "inversion",
+      "parents": [
+        "E6-2",
+        "OB-008"
+      ],
+      "justification": "Reversing the valence of explicit caveats produces an uncommon reciprocal reading while remaining anchored in stated limitations.",
+      "words": 11,
+      "closest": {
+        "id": "OB-008",
+        "chars": 0.641,
+        "words": 0.176
+      }
+    },
+    {
+      "id": "OB-G1-004",
+      "text": "Read success in one document as failure under the other's standards.",
+      "family": "inversion",
+      "parents": [
+        "OB-008",
+        "OB-026"
+      ],
+      "justification": "Cross-applying each paper's own standards generates a novel evaluation without rejecting or replacing either paper's findings.",
+      "words": 11,
+      "closest": {
+        "id": "OB-008",
+        "chars": 0.516,
+        "words": 0.176
+      }
+    },
+    {
+      "id": "OB-G1-005",
+      "text": "Take the point where documents conflict and examine it one level smaller.",
+      "family": "scale",
+      "parents": [
+        "E6-1",
+        "OB-012"
+      ],
+      "justification": "Anchoring a level shift at a concrete conflict should move the idea away from default treatments while retaining source specificity.",
+      "words": 12,
+      "closest": {
+        "id": "E6-1",
+        "chars": 0.5,
+        "words": 0.111
+      }
+    },
+    {
+      "id": "OB-G1-006",
+      "text": "Expand one shared observation until it challenges both documents' larger claims.",
+      "family": "scale",
+      "parents": [
+        "OB-009",
+        "E6-4"
+      ],
+      "justification": "Beginning with a mutually grounded observation and scaling it upward creates broad novelty without starting from unsupported speculation.",
+      "words": 11,
+      "closest": {
+        "id": "OB-001",
+        "chars": 0.452,
+        "words": 0.0
+      }
+    },
+    {
+      "id": "OB-G1-007",
+      "text": "Make each document answer the central question asked by the other.",
+      "family": "role",
+      "parents": [
+        "OB-016",
+        "OB-013"
+      ],
+      "justification": "Reciprocal questioning forces genuine cross-paper synthesis using both papers' existing agendas, supporting distance with high source dependence.",
+      "words": 11,
+      "closest": {
+        "id": "OB-028",
+        "chars": 0.491,
+        "words": 0.133
+      }
+    },
+    {
+      "id": "OB-G1-008",
+      "text": "Let what both documents merely describe become what must be explained.",
+      "family": "role",
+      "parents": [
+        "OB-013",
+        "OB-007"
+      ],
+      "justification": "Promoting described background into the object of explanation changes the research focus while reusing details already present in the sources.",
+      "words": 11,
+      "closest": {
+        "id": "OB-008",
+        "chars": 0.492,
+        "words": 0.056
+      }
+    },
+    {
+      "id": "OB-G1-009",
+      "text": "Require one explanation that fits a stubborn detail from each document.",
+      "family": "constraint",
+      "parents": [
+        "E6-1",
+        "OB-016"
+      ],
+      "justification": "This integration constraint demands an uncommon synthesis, but tying it to recalcitrant details from both papers protects grounding and coherence.",
+      "words": 11,
+      "closest": {
+        "id": "OB-029",
+        "chars": 0.423,
+        "words": 0.0
+      }
+    },
+    {
+      "id": "OB-G1-010",
+      "text": "Build an idea both documents would recognize, but neither would propose.",
+      "family": "constraint",
+      "parents": [
+        "E6-6",
+        "E6-3"
+      ],
+      "justification": "The dual condition explicitly balances novelty against recognizability, pushing beyond either source while requiring roots in both.",
+      "words": 11,
+      "closest": {
+        "id": "OB-008",
+        "chars": 0.469,
+        "words": 0.056
+      }
+    },
+    {
+      "id": "OB-G1-011",
+      "text": "Replace a broad term both documents share with their differing concrete cases.",
+      "family": "ambiguity_specificity",
+      "parents": [
+        "OB-023",
+        "OB-011"
+      ],
+      "justification": "Disaggregating a shared abstraction into differing reported cases exposes productive contrasts without introducing external terminology or material.",
+      "words": 12,
+      "closest": {
+        "id": "OB-008",
+        "chars": 0.537,
+        "words": 0.105
+      }
+    },
+    {
+      "id": "OB-G1-012",
+      "text": "Specify the exact point where a shared term stops applying to both.",
+      "family": "ambiguity_specificity",
+      "parents": [
+        "OB-023",
+        "OB-009"
+      ],
+      "justification": "Locating a term's precise boundary turns latent disagreement into a concrete research opening while avoiding harmful vagueness.",
+      "words": 12,
+      "closest": {
+        "id": "OB-023",
+        "chars": 0.426,
+        "words": 0.1
+      }
+    },
+    {
+      "id": "OB-G1-013",
+      "text": "Use one document's anomaly to question the other document's certainty.",
+      "family": "error",
+      "parents": [
+        "OB-026",
+        "OB-027"
+      ],
+      "justification": "Cross-testing with an actual anomaly is gentler than declaring a result wrong, yet should shift the idea beyond either interpretation.",
+      "words": 10,
+      "closest": {
+        "id": "OB-016",
+        "chars": 0.688,
+        "words": 0.231
+      }
+    },
+    {
+      "id": "OB-G1-014",
+      "text": "Follow a failure either document mentions only in passing.",
+      "family": "error",
+      "parents": [
+        "E6-2",
+        "OB-025"
+      ],
+      "justification": "A briefly mentioned failure is source-grounded but underexplored, offering a fresh starting point without discarding the main findings.",
+      "words": 9,
+      "closest": {
+        "id": "OB-008",
+        "chars": 0.491,
+        "words": 0.0
+      }
+    },
+    {
+      "id": "OB-G1-015",
+      "text": "Ask how the shared problem changed between the two documents' moments.",
+      "family": "time",
+      "parents": [
+        "OB-029",
+        "E6-1"
+      ],
+      "justification": "Comparing the papers' actual moments uses their contexts and chronology for temporal distance without speculative future displacement.",
+      "words": 11,
+      "closest": {
+        "id": "OB-026",
+        "chars": 0.565,
+        "words": 0.059
+      }
+    }
+  ],
+  "problems": [],
+  "close": []
+}
