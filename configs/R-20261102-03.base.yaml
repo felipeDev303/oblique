@@ -1,0 +1,28 @@
+# The limits of the proxy's real trial, in the shape of the app's config, with its own ledger.
+ledger: runs/R-20261102-03/ledger.jsonl
+
+generator:
+  provider: meta
+  model: muse-spark-1.3
+  params: {temperature: 1.0, max_tokens: 4000}
+  sheet_params: {temperature: 0, max_tokens: 4000}
+  timeout_seconds: 300
+  max_attempts: 2
+
+prices_per_m:
+  muse-spark-1.3: {in: 1.25, cached: 0.15, out: 4.25}   # dev.meta.ai pricing page, 2026-11-01
+
+limits:
+  min_documents: 2
+  max_documents: 5
+  max_file_mb: 20
+  max_pages_per_document: 50
+  sets_per_session: 3
+  session_usd: 0.12          # approved up to US$0.15; no new call past this
+  budget_usd: 0.12
+  max_running_sets: 2
+
+deck:
+  note: "Provisional deck: the final one is chosen after the confirmation run."
+  cards: [OB-001, OB-004, OB-005, OB-007, OB-008, OB-009, OB-011, OB-012, OB-013,
+          OB-016, OB-018, OB-020, OB-022, OB-023, OB-025, OB-026, OB-027, OB-029]

@@ -1,0 +1,17 @@
+# OpenAI-compatible proxy: uv run --group product python -m oblique.proxy.app configs/proxy.yaml
+# Model, prices, ledger, budget, session limit and the default deck come from the app's config, so
+# the app and the proxy share one spending cap.
+product_config: configs/product.yaml
+cache: .cache/proxy.db       # separate from the experiment; never holds the requests (DocumentCache)
+host: 127.0.0.1
+port: 8001
+
+k: 3                         # answers per request with muse-spark-1.3+oblique
+concurrency: 4
+max_tokens: 12000            # ceiling per call; a client's max_tokens can only lower it
+max_body_mb: 1
+
+# Optional: another deck for the proxy, instead of the provisional one in the app's config.
+# deck:
+#   note: "Why this deck."
+#   cards: [E6-1, E6-2, E6-3, E6-4, E6-5, E6-6]

@@ -23,7 +23,6 @@ import logging
 import random
 import secrets
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from oblique.cache import Cache
@@ -33,6 +32,7 @@ from oblique.generate.schema import IdeaCard
 from oblique.generate.validate import parse_set, unfence
 from oblique.llm import Completion, ContentFilteredError, LLMClient
 from oblique.product.documents import Document, Sheet, parse_sheet
+from oblique.product.spend import SpendLedger, call_cost
 from oblique.prompts.product import (
     DOCUMENT_SHEET_V1,
     IDEATION_SHEETS_V1,
@@ -154,11 +154,11 @@ class ProductService:
         )
         self.sessions: dict[str, Session] = {}
         self.jobs: dict[str, Job] = {}
-        self.ledger = Path(cfg["ledger"])
-        self.spent_usd = 0.0
-        if self.ledger.exists():
-            lines = self.ledger.read_text("utf-8").splitlines()
-            self.spent_usd = sum(json.loads(line)["cost_usd"] for line in lines)
+        self.ledger = SpendLedger(cfg["ledger"])
+
+    @property
+    def spent_usd(self) -> float:
+        return self.ledger.total()
 
     # --- limits ---------------------------------------------------------------
 
@@ -223,12 +223,7 @@ class ProductService:
         c = await self.client.complete(self.gen["model"], messages, params=params, attempt=attempt)
         if not c.from_cache:
             u = c.usage
-            cost = (
-                (u.tokens_in - u.tokens_cached) * self.price["in"]
-                + u.tokens_cached * self.price["cached"]
-                + u.tokens_out * self.price["out"]
-            ) / 1e6
-            self.spent_usd += cost
+            cost = call_cost(u, self.price)
             session.spent_usd += cost
             prompt = DOCUMENT_SHEET_V1 if kind == "sheet" else IDEATION_SHEETS_V1
             row = {
@@ -241,9 +236,7 @@ class ProductService:
                 "tokens_reasoning": u.tokens_reasoning,
                 "cost_usd": cost,
             }
-            self.ledger.parent.mkdir(parents=True, exist_ok=True)
-            with self.ledger.open("a", encoding="utf-8", newline="\n") as f:
-                f.write(json.dumps(row) + "\n")
+            self.ledger.record(row)
         return c
 
     async def read_document(self, session: Session, document: Document) -> Sheet:

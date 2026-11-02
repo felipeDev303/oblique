@@ -10,6 +10,7 @@ from oblique.prompts.ideation import (
     ideation_messages,
 )
 from oblique.prompts.product import DOCUMENT_SHEET_V1, IDEATION_SHEETS_V1
+from oblique.prompts.proxy import PROXY_SEQUENCE_V1
 from oblique.prompts.quality import (
     QUALITY_V1,
     QUALITY_V2,
@@ -34,6 +35,7 @@ PROMPTS = {
         EVOLVE_V1,
         DOCUMENT_SHEET_V1,
         IDEATION_SHEETS_V1,
+        PROXY_SEQUENCE_V1,
     )
 }
 
@@ -47,6 +49,7 @@ __all__ = [
     "IDEATION_V3",
     "INJECT_V1",
     "PROMPTS",
+    "PROXY_SEQUENCE_V1",
     "QUALITY_V1",
     "QUALITY_V2",
     "WORD_LIMITS",
