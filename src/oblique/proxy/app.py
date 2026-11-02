@@ -2,8 +2,8 @@
 
     uv run --group product python -m oblique.proxy.app configs/proxy.yaml
 
-Listens on localhost by default. It holds the provider's key and accepts any client key, so it must
-not be exposed without an access control in front of it; the budget is the only hard stop.
+Listens only on localhost, and refuses to start on any other address: it holds the provider's key
+and accepts any client key, so anyone who could reach it could spend the budget.
 """
 
 from __future__ import annotations
@@ -18,6 +18,15 @@ from fastapi.responses import JSONResponse
 
 from oblique.proxy.service import ProxyError, ProxyService, session_of
 from oblique.smoke import load_env
+
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def local_host(cfg: dict[str, Any]) -> str:
+    host = cfg.get("host", "127.0.0.1")
+    if host not in LOCAL_HOSTS:
+        raise SystemExit(f"the proxy listens only on localhost, not on {host!r}")
+    return host
 
 
 def create_app(cfg: dict[str, Any], *, transport: Any = None, wait: Any = None) -> FastAPI:
@@ -55,7 +64,7 @@ def main(argv: list[str]) -> None:
 
     load_env()
     cfg = yaml.safe_load(Path(argv[0]).read_text(encoding="utf-8"))
-    uvicorn.run(create_app(cfg), host=cfg.get("host", "127.0.0.1"), port=cfg.get("port", 8001))
+    uvicorn.run(create_app(cfg), host=local_host(cfg), port=cfg.get("port", 8001))
 
 
 if __name__ == "__main__":

@@ -17,8 +17,9 @@ from oblique.product.service import ProductService
 from oblique.product.spend import SpendLedger
 from oblique.prompts.ideation import INJECT_V1
 from oblique.prompts.proxy import PREVIOUS, PROXY_SEQUENCE_V1, oblique_messages
-from oblique.proxy.app import create_app
+from oblique.proxy.app import create_app, local_host
 from oblique.proxy.service import ProxyService, session_of
+from oblique.proxy.trial import parse_listening
 
 OPT_IN = "muse-spark-1.3+oblique"
 DECK = ["OB-001", "OB-004", "OB-005", "OB-007"]
@@ -410,6 +411,30 @@ def test_the_session_limit_returns_what_was_written_and_stops(cfg, provider):
             headers={"authorization": "Bearer other"},
         )
         assert other.status_code == 200
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.168.1.10", "example.org", "::"])
+def test_the_proxy_refuses_to_listen_beyond_localhost(host):
+    with pytest.raises(SystemExit, match="only on localhost"):
+        local_host({"host": host})
+
+
+def test_the_proxy_listens_on_localhost_by_default_and_in_the_committed_config():
+    assert local_host({}) == "127.0.0.1"
+    cfg = yaml.safe_load(Path("configs/proxy.yaml").read_text("utf-8"))
+    assert local_host(cfg) == "127.0.0.1"
+
+
+def test_the_listener_check_does_not_depend_on_the_system_language():
+    netstat = """
+  Proto  Dirección local  Dirección remota  Estado
+  TCP    127.0.0.1:8001   0.0.0.0:0         ESCUCHANDO
+  TCP    127.0.0.1:8001   127.0.0.1:50000   ESTABLISHED
+  TCP    0.0.0.0:9000     0.0.0.0:0         LISTENING
+"""
+    assert parse_listening(netstat, 8001) == ["127.0.0.1:8001"]
+    assert parse_listening(netstat, 9000) == ["0.0.0.0:9000"]
+    assert parse_listening(netstat, 1234) == []
 
 
 def test_sessions_come_from_a_hash_of_the_key():

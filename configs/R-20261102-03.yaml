@@ -1,0 +1,16 @@
+# Real trial of the proxy: one request without opt-in and one with it, approved up to US$0.15.
+# uv run --env-file <path to .env> python -m oblique.proxy.trial configs/R-20261102-03.yaml
+run_id: R-20261102-03
+product_config: configs/R-20261102-03.base.yaml
+cache: .cache/proxy-trial.db
+host: 127.0.0.1
+port: 8001
+
+k: 3
+concurrency: 4
+max_tokens: 4000             # at most US$0.017 of output per call, 4 calls
+max_body_mb: 1
+
+question: >-
+  Propose a new research idea on how to make city buses run closer to their timetable without
+  adding vehicles. Answer in at most 80 words.
