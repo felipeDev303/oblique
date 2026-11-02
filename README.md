@@ -78,7 +78,11 @@ tests/
 
 - Map of the deck on split A (R-20261031-01, US$3.15, 16,895 calls): 48 conditions over 50 instances, classified with the bands fixed in ADR-003. The selection rule gives an ML of 18 of the 30 seed cards, and no liminal card reaches the confirmed sublabel, because the CI of Δq is wider than the margin. 6 of the 10 random-noun controls also land in the liminal band, the same share as the seed cards. Results in [`runs/R-20261031-01/summary.md`](runs/R-20261031-01/summary.md).
 - The map summary now prints CIs for the invalid and filtered rates and lists the confirmed liminal cards.
-- First slice of "bring your papers" (`python -m oblique.product.app configs/product.yaml`, tested against a fake API; no real PDF has reached the model yet): upload 2–5 PDFs and get a sequential K = 3 set from Muse Spark Standard, with each idea's card and sources visible. Each cited quote is checked against the text of the PDF. Limits per session and an overall budget in a persistent ledger protect the credits. The PDFs go inline, stay in memory only for the set, and never enter the local cache. The deck is provisional until the confirmation run (ADR-010).
+- First slice of "bring your papers" (`python -m oblique.product.app configs/product.yaml`): upload 2–5 PDFs and get a sequential K = 3 set from Muse Spark Standard, with each idea's card and sources visible. Each cited quote is checked against the text of the PDF. Limits per session and an overall budget in a persistent ledger protect the credits. The PDFs go inline, stay in memory only for the set, and never enter the local cache. The deck is provisional until the confirmation run (ADR-010).
+
+### Nov 2 (Day 8)
+
+- "Bring your papers" now reads each PDF in its own call into a document sheet (title, summary, methods, limitations, quoted evidence) and writes the ideas over the sheets. Sources cite evidence by ID, and each quote is checked against the text of its PDF. A PDF past 50 pages is refused whole, with no call. Real trial (R-20261102-02, US$0.27, CC BY papers from arXiv, IDs in the [summary](runs/R-20261102-02/summary.md)): a 94-page PDF was refused at no cost, a first set cost US$0.22 and a second set over the same PDFs US$0.05.
 
 ## License
 
