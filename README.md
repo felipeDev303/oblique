@@ -80,6 +80,10 @@ tests/
 - The map summary now prints CIs for the invalid and filtered rates and lists the confirmed liminal cards.
 - Evolution G1 (ADR-010, `python -m oblique.evolve.g1`, run R-20261101-01, US$0.23): one call to Muse Wonder with the map as data, which proposes 15 cards with family, parents and a justification. The call is saved verbatim in [`deck/evolution/G1/`](deck/evolution/G1/). The runner checks the deck rules and reports the closest existing card for review. The cards are not measured yet.
 
+### Nov 2 (Day 8)
+
+- The author's ADR-002 review discarded 2 of the 15 G1 cards; the other 13 entered the deck. Measured on split A (`python -m oblique.evolve.measure`, R-20261102-01, US$0.97) with the anchors, S0 and C2 of the map, in a joint regression with the map's stored judgments. 9 cards are liminal and form MG, 1 of them confirmed, 4 are inert and none is destructive. Wonder saw this split's results, so the effect may shrink on split B. Results in [`runs/R-20261102-01/summary.md`](runs/R-20261102-01/summary.md).
+
 ## License
 
 Code: [MIT](LICENSE). The card deck (`deck/cards/`) is released under [CC BY 4.0](deck/LICENSE).
