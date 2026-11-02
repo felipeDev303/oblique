@@ -20,6 +20,10 @@ q controlled for length comes from a regression on the judgments of split B only
 resample. CU uses raw q (ADR-009). Comparisons are paired on the instances complete in both
 conditions (ADR-006, amendment 6). The report opens with H1, then the grounding guard, then the
 exploratory hypotheses.
+
+Agreement (amendment 3): Muse Wonder judges 30 ideas per condition against the anchor, in both
+orders. The same drawn positions (instance, slot) are used in every condition, so its difference
+between ML and C1s is paired. It is a sensitivity analysis and does not decide H1.
 """
 
 from __future__ import annotations
@@ -44,9 +48,20 @@ from oblique.generate.records import write_jsonl
 from oblique.generate.validate import InvalidReason
 from oblique.metrics import paired_differences
 from oblique.metrics.bootstrap import bca_mean_ci, bootstrap_mean_ci
-from oblique.metrics.calibration import controlled_win_rates, fit_condition_logit, spearman
-from oblique.prompts import judged_words
-from oblique.seeds import seed_sequence
+from oblique.metrics.calibration import (
+    agreement,
+    controlled_win_rates,
+    fit_condition_logit,
+    spearman,
+)
+from oblique.prompts import (
+    judged_words,
+    parse_winner,
+    q_from_orders,
+    quality_messages,
+    render_card,
+)
+from oblique.seeds import rng, seed_sequence
 from oblique.smoke import load_env, write_jsonl_dicts
 
 DECK_CONDITIONS = ("R", "E6", "ML", "MG")  # the order is part of the pre-registered draw
@@ -70,6 +85,13 @@ def draw_cards(
             for iid in sorted(instance_ids)
         }
     return draws
+
+
+def draw_wonder_positions(instance_ids: list[str], n: int, k: int = K) -> list[list[Any]]:
+    """The (instance, slot) positions Wonder judges in every condition, with the `wonder_b` seed."""
+    positions = [(iid, slot) for iid in sorted(instance_ids) for slot in range(k)]
+    chosen = rng("wonder_b").choice(len(positions), size=n, replace=False)
+    return [list(positions[i]) for i in sorted(chosen.tolist())]
 
 
 def h1_verdict(delta_cu: dict[str, float], delta_q: dict[str, float], delta: float) -> str:
@@ -136,10 +158,22 @@ class ConfirmB(Baseline):
             raise SystemExit(f"{self.cfg['draws']} differs from the seeded draw")
         return draws
 
+    def expected_wonder(self) -> list[list[Any]]:
+        return draw_wonder_positions(self.ids, self.cfg["wonder"]["ideas_per_condition"])
+
+    def check_wonder(self) -> list[tuple[str, int]]:
+        positions = self.expected_wonder()
+        stored = json.loads(Path(self.cfg["wonder"]["positions"]).read_text("utf-8"))
+        if stored != positions:
+            raise SystemExit(f"{self.cfg['wonder']['positions']} differs from the seeded draw")
+        return [(iid, slot) for iid, slot in positions]
+
     def write_draws(self) -> Path:
         path = Path(self.cfg["draws"])
         text = json.dumps(self.expected_draws(), indent=1, sort_keys=True) + "\n"
         path.write_text(text, "utf-8", newline="\n")
+        positions = Path(self.cfg["wonder"]["positions"])
+        positions.write_text(json.dumps(self.expected_wonder()) + "\n", "utf-8", newline="\n")
         return path
 
     def seen_in_earlier_runs(self) -> list[str]:
@@ -190,9 +224,52 @@ class ConfirmB(Baseline):
 
     # --- judges ---------------------------------------------------------------
 
+    async def quality_wonder(self, client, x: Instance, cond: str, slot: int, idea) -> None:
+        """Wonder against the anchor, both orders: agreement only (ADR-010, amendment 3)."""
+        key = (x.id, cond, slot)
+        anchor = self.anchors[x.id]
+        if anchor is None:
+            self.q["wonder"][key] = None
+            return
+        prompt = self.prompt("quality")
+        mode = self.cfg["judges"]["wonder"]
+        ids = {"instance": x.id, "condition": cond, "slot": slot}
+        winners = []
+        for idea_first in (True, False):
+            messages = quality_messages(
+                idea, render_card(anchor), idea_first=idea_first, prompt=prompt
+            )
+            winners.append(
+                await self.judge_call(
+                    client,
+                    "quality-wonder",
+                    prompt,
+                    mode,
+                    messages,
+                    parse_winner,
+                    ids | {"idea_first": idea_first},
+                )
+            )
+        if None in winners:
+            self.q["wonder"][key] = None
+        else:
+            self.q["wonder"][key] = q_from_orders(winners[0], winners[1])
+            self.verdicts["wonder"][key] = (winners[0], winners[1])
+
+    def wonder_jobs(self, client, instances: list[Instance]) -> list[Any]:
+        by_id = {x.id: x for x in instances}
+        jobs = []
+        for iid, slot in self.check_wonder():
+            for cond in self.conditions:
+                record = next((r for r in self.slots[(iid, cond)] if r.slot == slot), None)
+                if record is not None and record.valid:
+                    jobs.append(self.quality_wonder(client, by_id[iid], cond, slot, record.idea))
+        return jobs
+
     async def judge(self, instances: list[Instance]) -> None:
         client = self.judge_client("spark")
-        jobs = []
+        wonder = self.judge_client("wonder")
+        jobs = self.wonder_jobs(wonder, instances)
         for x in instances:
             for cond in self.conditions:
                 valid = [(r.slot, r.idea) for r in self.slots[(x.id, cond)] if r.valid]
@@ -207,8 +284,57 @@ class ConfirmB(Baseline):
             await asyncio.gather(*jobs)
         finally:
             self.notes["judge_client"] = self.client_stats(client)
+            self.notes["wonder_client"] = self.client_stats(wonder)
 
     # --- report ---------------------------------------------------------------
+
+    def wonder_report(self, n_boot: int) -> dict[str, Any]:
+        """Agreement with Spark on the drawn ideas, and ML - C1s on those ideas per judge. An
+        invalid idea has q = 0 for both judges and enters only the difference, as in CU."""
+        positions = self.check_wonder()
+        judged = [
+            (iid, cond, slot)
+            for iid, slot in positions
+            for cond in self.conditions
+            if self.q["wonder"].get((iid, cond, slot)) is not None
+            and self.q["anchor"].get((iid, cond, slot)) is not None
+        ]
+        ordered = [
+            k for k in judged if k in self.verdicts["wonder"] and k in self.verdicts["anchor"]
+        ]
+
+        def value(judge: str, iid: str, cond: str, slot: int) -> float | None:
+            record = next((r for r in self.slots[(iid, cond)] if r.slot == slot), None)
+            if record is None or not record.valid:
+                return 0.0
+            return self.q[judge].get((iid, cond, slot))
+
+        def difference(judge: str) -> dict[str, Any] | None:
+            by_instance: dict[str, list[float]] = {}
+            for iid, slot in positions:
+                ml, base = (value(judge, iid, c, slot) for c in (PRIMARY, BASELINE))
+                if ml is not None and base is not None:
+                    by_instance.setdefault(iid, []).append(ml - base)
+            means = [sum(v) / len(v) for v in by_instance.values()]
+            return ci_dict(bootstrap_mean_ci(means, n_boot=n_boot)) if means else None
+
+        return {
+            "ideas_per_condition": len(positions),
+            "ideas_judged": len(judged),
+            "agreement_q": agreement(
+                [self.q["anchor"][k] for k in judged], [self.q["wonder"][k] for k in judged]
+            )
+            if judged
+            else None,
+            "agreement_per_order": agreement(
+                [v for k in ordered for v in self.verdicts["anchor"][k]],
+                [v for k in ordered for v in self.verdicts["wonder"][k]],
+            )
+            if ordered
+            else None,
+            "delta_q_ml_c1s_wonder": difference("wonder"),
+            "delta_q_ml_c1s_spark_same_ideas": difference("anchor"),
+        }
 
     def regression_rows(self) -> list[dict[str, Any]]:
         """One row per judgment of this run. An invalid or filtered idea is two losses at equal
@@ -327,6 +453,7 @@ class ConfirmB(Baseline):
                 "delta_q_raw_ml_c1s": compare("ML", "C1s", "q"),
                 "delta_cu_strict_ml_c1s": compare("ML", "C1s", "cu_strict"),
                 "delta_cu_embed_ml_c1s": compare("ML", "C1s", "cu_embed"),
+                "wonder": self.wonder_report(n_other),
             },
             "conditions": table,
             "length": {
@@ -358,6 +485,7 @@ class ConfirmB(Baseline):
             "sequential": n * K * sequential,
             "quality": quality,
             "quality_gold": quality if self.cfg["q_gold"] else 0,
+            "quality_wonder": 2 * self.cfg["wonder"]["ideas_per_condition"] * len(self.conditions),
             "grounding": ideas,
             "distance": n * len(self.conditions) * K * (K - 1) // 2,
         }
@@ -377,6 +505,9 @@ class ConfirmB(Baseline):
             "b_instances_in_earlier_runs": self.seen_in_earlier_runs(),
             "draws_file": self.cfg["draws"],
             "draws_sha256": hashlib.sha256(Path(self.cfg["draws"]).read_bytes()).hexdigest()[:16],
+            "wonder_positions_sha256": hashlib.sha256(
+                Path(self.cfg["wonder"]["positions"]).read_bytes()
+            ).hexdigest()[:16],
             "conditions": {
                 c: {
                     "kind": "one call" if c == "C1" else "sequential",
@@ -417,6 +548,7 @@ class ConfirmB(Baseline):
             raise SystemExit(f"{metrics} exists: split B runs once (ADR-010, amendment 2)")
         self.check_decks()
         self.check_draws()
+        self.check_wonder()
         instances = self.instances()
         self.out.mkdir(parents=True, exist_ok=True)
         (self.out / "config.yaml").write_text(yaml.safe_dump(self.cfg, sort_keys=False), "utf-8")
@@ -442,8 +574,14 @@ def _ci(cell: dict[str, Any] | None) -> str:
     return f"{cell['mean']:.3f} [{cell['lo']:.3f}, {cell['hi']:.3f}]" if cell else "n/a"
 
 
+def _agreement(cell: dict[str, Any] | None) -> str:
+    return f"{cell['exact']:.1%}, kappa {cell['kappa']:.2f}" if cell else "n/a"
+
+
 def render_summary(result: dict[str, Any]) -> str:
     h1, guard, ex = result["h1"], result["grounding_guard"], result["exploratory"]
+    sens = result["sensitivity"]
+    wonder = sens["wonder"]
     cu = h1["delta_cu_ml_c1s"]
     lines = [
         f"# {result['run_id']} · Confirmation on split B",
@@ -473,14 +611,26 @@ def render_summary(result: dict[str, Any]) -> str:
         f"- H6, controlled q, E6 - C1s: {_ci(ex['h6_q_controlled_e6_c1s'])}",
         f"- H7, CU(E6) - CU(ML): {_ci(ex['h7_cu_e6_ml'])}",
         "",
+        "## Sensitivity (does not decide H1)",
+        "",
+        f"- Raw q, ML - C1s: {_ci(sens['delta_q_raw_ml_c1s'])}",
+        f"- CU under the strict rule, ML - C1s: {_ci(sens['delta_cu_strict_ml_c1s'])}",
+        f"- CU with embedding distance, ML - C1s: {_ci(sens['delta_cu_embed_ml_c1s'])}",
+        f"- Wonder on {wonder['ideas_judged']} ideas: agreement with Spark "
+        f"{_agreement(wonder['agreement_q'])} per idea, "
+        f"{_agreement(wonder['agreement_per_order'])} per order.",
+        f"- q, ML - C1s, on those ideas: Wonder {_ci(wonder['delta_q_ml_c1s_wonder'])}; "
+        f"Spark {_ci(wonder['delta_q_ml_c1s_spark_same_ideas'])}.",
+        "",
         "## Conditions",
         "",
-        "| Condition | CU | q controlled | q raw | d | Grounding | Invalid | Filtered |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Condition | CU | q controlled | q raw | q gold | d | Grounding | Invalid | Filtered |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for cond, c in result["conditions"].items():
         lines.append(
-            f"| {cond} | {_ci(c['cu'])} | {_ci(c['q_controlled'])} | {_ci(c['q'])} | {_ci(c['d'])} "
+            f"| {cond} | {_ci(c['cu'])} | {_ci(c['q_controlled'])} | {_ci(c['q'])} "
+            f"| {_ci(c['q_gold'])} | {_ci(c['d'])} "
             f"| {_ci(c['grounding'])} | {c['invalid']} | {c['filtered']} |"
         )
     return "\n".join(lines) + "\n"
@@ -499,6 +649,7 @@ def main(argv: list[str]) -> None:
     if argv[1:] == ["--plan"]:
         run.check_decks()
         run.check_draws()
+        run.check_wonder()
         print(json.dumps(run.plan(), indent=2))
         return
     load_env()

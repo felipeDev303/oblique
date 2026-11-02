@@ -16,7 +16,7 @@ from tenacity import wait_none
 from oblique import bench, confirm
 from oblique.bench import Instance, SealedSplitError, split_ids
 from oblique.cache import Cache
-from oblique.confirm import ConfirmB, draw_cards, h1_verdict, main
+from oblique.confirm import ConfirmB, draw_cards, draw_wonder_positions, h1_verdict, main
 from oblique.deck import load_deck
 from oblique.deck.controls import DECK_DIR
 from oblique.llm import ContentFilteredError, LLMClient
@@ -74,7 +74,8 @@ class FakeAPI:
         self.refuse = refuse or (lambda system, user: False)
 
     async def _models(self):
-        return SimpleNamespace(data=[SimpleNamespace(id="muse-spark-1.3-contributor")])
+        ids = ("muse-spark-1.3-contributor", "muse-wonder-1.0")
+        return SimpleNamespace(data=[SimpleNamespace(id=m) for m in ids])
 
     async def create(self, **request):
         self.requests.append(request)
@@ -119,10 +120,12 @@ def cfg(tmp_path, monkeypatch):
     c |= {
         "cache": str(tmp_path / "cache.db"),
         "draws": str(tmp_path / "draws.json"),
+        "wonder": {"ideas_per_condition": 4, "positions": str(tmp_path / "wonder.json")},
         "n_boot_h1": 50,
         "n_boot_other": 50,
     }
     Path(c["draws"]).write_text(json.dumps(draw_cards(IDS, c["decks"])), "utf-8")
+    Path(c["wonder"]["positions"]).write_text(json.dumps(draw_wonder_positions(IDS, 4)), "utf-8")
     monkeypatch.setattr(confirm, "split_ids", lambda split: [(i, "p") for i in IDS])
     return c
 
@@ -191,6 +194,7 @@ def test_the_plan_counts_every_call(cfg, tmp_path):
         "sequential": n * 3 * 6,
         "quality": 2 * n * 3 * conds,
         "quality_gold": 2 * n * 3 * conds,
+        "quality_wonder": 2 * 4 * conds,
         "grounding": n * 3 * conds,
         "distance": n * 3 * conds,
     }
@@ -335,6 +339,61 @@ def test_q_against_the_gold_follows_the_config(cfg, tmp_path, unsealed):
     assert not any("Gold." in r["messages"][1]["content"] for r in api.requests)
     plan = runner(cfg, tmp_path, FakeAPI()).plan()
     assert plan["blocks"]["quality_gold"]["calls"] == 0
+
+
+# --- Wonder --------------------------------------------------------------------------------
+
+
+def test_wonder_judges_the_same_positions_in_every_condition_against_the_anchor(
+    cfg, tmp_path, unsealed
+):
+    api = FakeAPI()
+    run = runner(cfg, tmp_path, api)
+    asyncio.run(run.run())
+    calls = [r for r in api.requests if r["model"] == "muse-wonder-1.0"]
+    assert len(calls) == 2 * 4 * 7
+    assert all(r["temperature"] == 0 for r in calls)
+    assert not any("Gold." in r["messages"][1]["content"] for r in calls)
+    positions = {tuple(p) for p in draw_wonder_positions(IDS, 4)}
+    for cond in cfg["conditions"]:
+        judged = {(i, s) for i, c, s in run.q["wonder"] if c == cond}
+        assert judged == positions
+    orders = [r["messages"][1]["content"] for r in calls]
+    assert len(set(orders)) == len(orders)
+    wonder = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))["sensitivity"][
+        "wonder"
+    ]
+    assert wonder["ideas_judged"] == 4 * 7
+    assert wonder["agreement_q"]["n"] == 4 * 7 and wonder["agreement_per_order"]["n"] == 2 * 4 * 7
+    assert wonder["agreement_q"]["exact"] == 1.0  # the fake judges by the same rule
+    assert wonder["delta_q_ml_c1s_wonder"] == wonder["delta_q_ml_c1s_spark_same_ideas"]
+    assert "Wonder on 28 ideas" in (tmp_path / "run" / "summary.md").read_text("utf-8")
+
+
+def test_wonder_does_not_enter_the_regression(cfg, tmp_path, unsealed):
+    run = runner(cfg, tmp_path, FakeAPI())
+    asyncio.run(run.run())
+    assert len(run.regression_rows()) == 2 * len(IDS) * 3 * 7
+
+
+def test_a_stored_wonder_draw_that_differs_stops_the_run(cfg, tmp_path, unsealed):
+    Path(cfg["wonder"]["positions"]).write_text(json.dumps([["i-1000", 0]]), "utf-8")
+    api = FakeAPI()
+    with pytest.raises(SystemExit, match="differs from the seeded draw"):
+        asyncio.run(runner(cfg, tmp_path, api).run())
+    assert api.requests == []
+
+
+def test_the_committed_wonder_positions_are_the_seeded_draw_of_split_b():
+    with open(REAL_CONFIG, encoding="utf-8") as f:
+        c = yaml.safe_load(f)
+    ids = sorted(iid for iid, _ in split_ids("B"))
+    assert c["wonder"]["ideas_per_condition"] == 30
+    stored = json.loads(Path(c["wonder"]["positions"]).read_text("utf-8"))
+    assert stored == draw_wonder_positions(ids, 30)
+    assert len({tuple(p) for p in stored}) == 30
+    assert (c["budget"]["approved_usd"], c["budget"]["stop_usd"]) == (4.0, 3.7)
+    assert c["q_gold"] is True and "C1" in c["conditions"]
 
 
 # --- once ----------------------------------------------------------------------------------

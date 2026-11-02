@@ -10,7 +10,7 @@ def test_master_seed_is_the_kickoff_date():
 
 def test_purpose_order_is_frozen():
     # Reordering would silently change every derived stream; new purposes are appended.
-    assert PURPOSES == ("splits", "cards", "bootstrap", "baseline")
+    assert PURPOSES == ("splits", "cards", "bootstrap", "baseline", "wonder_b")
     for i, purpose in enumerate(PURPOSES):
         ss = seed_sequence(purpose)
         assert ss.entropy == MASTER_SEED
