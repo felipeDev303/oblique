@@ -37,6 +37,9 @@ class InvalidReason(StrEnum):
     not_text = "not_text"  # field present but not a string
     empty_field = "empty_field"  # field empty or whitespace only
     content_filtered = "content_filtered"  # the provider's filter refused the request twice
+    provider_error = (
+        "provider_error"  # the provider failed it in every attempt (ADR-006, amendment 7)
+    )
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,13 @@ def _check_idea(index: int, obj: Any) -> Slot:
 def filtered_set(k: int) -> ParsedSet:
     """A generation the content filter refused: K invalid slots (ADR-006, amendment 6)."""
     slots = tuple(Slot(i, None, InvalidReason.content_filtered) for i in range(k))
+    return ParsedSet(k, slots)
+
+
+def provider_error_set(k: int) -> ParsedSet:
+    """A generation the provider failed in every attempt and launch: K slots, no idea, and no
+    call (ADR-006, amendment 7)."""
+    slots = tuple(Slot(i, None, InvalidReason.provider_error) for i in range(k))
     return ParsedSet(k, slots)
 
 
