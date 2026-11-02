@@ -195,7 +195,10 @@ class ConfirmB(Baseline):
 
     async def generate(self, instances: list[Instance]) -> None:
         gen = self.cfg["generator"]
-        client = self.new_client(gen["provider"], gen["concurrency"])
+        # The timeout is not part of a cache key: it changes how long a call may take, not what
+        # it returns.
+        timeout = {"timeout": gen["timeout_seconds"]} if "timeout_seconds" in gen else {}
+        client = self.new_client(gen["provider"], gen["concurrency"], **timeout)
         draws = self.check_draws()
 
         async def reference(x: Instance):

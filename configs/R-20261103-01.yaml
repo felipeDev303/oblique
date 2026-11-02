@@ -46,6 +46,9 @@ generator:
   model: muse-spark-1.3-contributor
   params: {temperature: 1.0, max_tokens: 12000, response_format: {type: json_object}}
   concurrency: 16
+  # Added 2026-11-02 after two cuts: some Ts calls (temperature 1.5) did not finish in the default
+  # 180 s per attempt. It does not change any cache key or response.
+  timeout_seconds: 900
 
 judges:
   spark:

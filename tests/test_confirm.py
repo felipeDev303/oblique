@@ -396,6 +396,29 @@ def test_the_committed_wonder_positions_are_the_seeded_draw_of_split_b():
     assert c["q_gold"] is True and "C1" in c["conditions"]
 
 
+def test_the_generator_timeout_comes_from_the_config_and_not_the_cache_key(cfg, tmp_path):
+    from oblique.cache import make_key
+
+    run = runner(cfg, tmp_path, FakeAPI())
+    seen = []
+    original = run.new_client
+
+    def spy(provider, concurrency=1, **kw):
+        seen.append(kw.get("timeout"))
+        return original(provider, concurrency, **kw)
+
+    run.new_client = spy
+    cfg["generator"]["timeout_seconds"] = 900
+    run.check_draws = lambda: run.expected_draws()
+    run.generate_anchors = lambda client, instances: asyncio.sleep(0)
+    asyncio.run(run.generate([]))
+    assert seen == [900]
+    messages = [{"role": "user", "content": "x"}]
+    assert make_key("m", messages, {"a": 1}, 0, 0, provider="meta") == make_key(
+        "m", messages, {"a": 1}, 0, 0, provider="meta"
+    )
+
+
 # --- once ----------------------------------------------------------------------------------
 
 
