@@ -82,7 +82,6 @@ def test_only_the_new_cards_are_generated_and_the_reference_comes_from_the_cache
     generations = [r for r in new if "research scientist" in r["messages"][0]["content"]]
     assert len(generations) == len(CARDS) * len(INSTANCES)
     assert all("oblique constraint" in r["messages"][1]["content"] for r in generations)
-    judged = "\n".join(r["messages"][1]["content"] for r in new)
     # C2's judgments are cached too: every paid judge call reads an idea under a new card.
     assert len(new) == len(CARDS) * len(INSTANCES) * (1 + 2 + 1 + 3)
 
