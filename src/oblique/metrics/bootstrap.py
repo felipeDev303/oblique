@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from statistics import NormalDist
 
 import numpy as np
 
@@ -50,6 +51,43 @@ def bootstrap_mean_ci(
     means = x[idx].mean(axis=1)
     lo, hi = np.quantile(means, [alpha / 2, 1 - alpha / 2])
     return CI(mean=float(x.mean()), lo=float(lo), hi=float(hi), n=len(x))
+
+
+def bca_interval(
+    point: float, draws: np.ndarray, jackknife: np.ndarray, alpha: float = ALPHA
+) -> tuple[float, float]:
+    """Bias-corrected and accelerated interval, from bootstrap draws and leave-one-out values."""
+    normal = NormalDist()
+    below = float(np.mean(draws < point))
+    if below in (0.0, 1.0) or np.ptp(draws) == 0:
+        return (float(np.min(draws)), float(np.max(draws)))
+    z0 = normal.inv_cdf(below)
+    spread = jackknife.mean() - jackknife
+    denominator = 6 * float(np.sum(spread**2)) ** 1.5
+    acceleration = float(np.sum(spread**3)) / denominator if denominator else 0.0
+
+    def adjusted(tail: float) -> float:
+        z = normal.inv_cdf(tail)
+        return normal.cdf(z0 + (z0 + z) / (1 - acceleration * (z0 + z)))
+
+    lo, hi = np.quantile(draws, [adjusted(alpha / 2), adjusted(1 - alpha / 2)])
+    return float(lo), float(hi)
+
+
+def bca_mean_ci(
+    values: Sequence[float] | np.ndarray,
+    *,
+    n_boot: int = N_BOOT,
+    alpha: float = ALPHA,
+    seed: int | np.random.SeedSequence | None = None,
+) -> CI:
+    """BCa CI of the mean of one value per instance, on the same resamples as the percentile CI."""
+    x = np.asarray(values, dtype=float)
+    rng = np.random.default_rng(seed_sequence("bootstrap") if seed is None else seed)
+    draws = x[rng.integers(0, len(x), size=(n_boot, len(x)))].mean(axis=1)
+    jackknife = (x.sum() - x) / (len(x) - 1)
+    lo, hi = bca_interval(float(x.mean()), draws, jackknife, alpha)
+    return CI(mean=float(x.mean()), lo=lo, hi=hi, n=len(x))
 
 
 def paired_differences(a: Mapping[str, float], b: Mapping[str, float]) -> np.ndarray:

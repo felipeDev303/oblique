@@ -6,7 +6,8 @@ errors (429, timeouts, connection errors, 5xx) are retried with exponential
 backoff and full jitter. Identical requests in flight are deduplicated so the
 same response is never paid for twice. A request the provider's content filter
 refuses gets one identical retry, then raises `ContentFilteredError` (ADR-006,
-amendment 6): it is never cached, so a resumed run asks again.
+amendment 6): it is never cached, so a resumed run asks again, unless the run keeps a
+`filtered_log`: then a refusal is final and a later launch does not ask again.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import openai
@@ -212,7 +214,12 @@ class LLMClient:
         wait: wait_base | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         client: Any = None,
+        filtered_log: Path | None = None,
     ):
+        self.filtered_log = filtered_log
+        self.refused: set[str] = set()
+        if filtered_log is not None and filtered_log.exists():
+            self.refused = set(filtered_log.read_text("utf-8").split())
         self.provider = PROVIDERS[provider]
         self.cache = cache
         self.max_attempts = max_attempts
@@ -253,6 +260,9 @@ class LLMClient:
         if cached is not None:
             self.stats.cache_hits += 1
             return self._wrap(key, model, cached, from_cache=True)
+        if key in self.refused:
+            self.stats.content_filtered += 1
+            raise ContentFilteredError(key, "refused by the content filter in an earlier launch")
 
         future = self._inflight.get(key)
         if future is None:
@@ -321,6 +331,10 @@ class LLMClient:
             if CONTENT_FILTER not in str(e):
                 raise
             self.stats.content_filtered += 1
+            if self.filtered_log is not None:
+                self.filtered_log.parent.mkdir(parents=True, exist_ok=True)
+                with self.filtered_log.open("a", encoding="utf-8", newline="\n") as f:
+                    f.write(key + "\n")
             raise ContentFilteredError(key, str(e)) from e
 
     def _on_retry(self, state: RetryCallState) -> None:

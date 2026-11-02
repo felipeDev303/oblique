@@ -85,6 +85,7 @@ def controlled_win_rates(
     n_boot: int = 10_000,
     alpha: float = 0.05,
     seed: int | np.random.SeedSequence | None = None,
+    bca: bool = False,
 ) -> dict[str, Any]:
     """Win rate controlled for length against the anchor (ADR-009, point 7).
 
@@ -92,7 +93,10 @@ def controlled_win_rates(
     on one binary row per judgment (`instance`, `condition`, `win`, `delta_words`). The
     controlled rate of a condition is the fitted P(win) at equal length (delta = 0).
     Percentile CIs resample instances, since the ideas of an instance share one anchor.
+    With `bca`, each comparison also gets a BCa check (ADR-003), which refits once per instance
+    left out, on the same resamples.
     """
+    from oblique.metrics.bootstrap import bca_interval
     from oblique.seeds import seed_sequence
 
     conditions = list(conditions)
@@ -124,6 +128,17 @@ def controlled_win_rates(
         for p, a, b in zip(point, lo, hi, strict=True)
     ]
     k = len(conditions)
+    if bca:
+        left_out = np.array(
+            [
+                summarize(np.concatenate([g for j, g in enumerate(groups) if j != i]))
+                for i in range(len(groups))
+            ]
+        )
+        for c in range(k, k + len(pairs)):
+            cell[c]["bca_lo"], cell[c]["bca_hi"] = bca_interval(
+                float(point[c]), draws[:, c], left_out[:, c], alpha
+            )
     return {
         "rates": dict(zip(conditions, cell[:k], strict=True)),
         "differences": {f"{a}-{b}": c for (a, b), c in zip(comparisons, cell[k:-1], strict=True)},

@@ -178,12 +178,24 @@ class Baseline(Smoke):
         self.progress["generations"] += 1
         return records
 
-    async def generate_sequence(self, client, x: Instance, condition: str):
+    async def generate_sequence(
+        self,
+        client,
+        x: Instance,
+        condition: str,
+        *,
+        cards: list[Card] | None = None,
+        params: dict[str, Any] | None = None,
+    ):
         """Sequential set (ADR-009): K = 1 per call, conditioned on the valid ideas so far."""
         records, previous = [], []
         for slot in range(K):
             sample_idx = SEQUENTIAL_SAMPLE_BASE + slot
-            r = (await self.generate_call(client, x, condition, 1, sample_idx, previous))[0]
+            card = cards[slot] if cards else None
+            generated = await self.generate_call(
+                client, x, condition, 1, sample_idx, previous, card=card, params=params
+            )
+            r = generated[0]
             records.append(r.model_copy(update={"slot": slot}))
             if r.valid:
                 previous = [*previous, r.idea]
