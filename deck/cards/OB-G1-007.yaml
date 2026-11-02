@@ -1,0 +1,9 @@
+id: OB-G1-007
+text: "Make each document answer the central question asked by the other."
+family: role
+origin: evolved
+generation: 1
+parents: [OB-016, OB-013]
+opposite_of: []
+author: "muse-wonder-1.0"
+created: 2026-11-01

@@ -1,0 +1,9 @@
+id: OB-G1-006
+text: "Expand one shared observation until it challenges both documents' larger claims."
+family: scale
+origin: evolved
+generation: 1
+parents: [OB-009, E6-4]
+opposite_of: []
+author: "muse-wonder-1.0"
+created: 2026-11-01

@@ -248,7 +248,7 @@ class Evolve(Smoke):
         )
         report = validate_proposal(
             c.content,
-            load_deck(cfg.get("deck", DECK_DIR)),
+            {k: c for k, c in load_deck(cfg.get("deck", DECK_DIR)).items() if c.generation == 0},
             cfg["n_cards"],
             mode["model"],
             date.fromisoformat(str(cfg["created"])),

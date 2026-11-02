@@ -7,8 +7,9 @@ One card per YAML file in `cards/`, named after its ID and validated by `oblique
 | `OB-001` … `OB-030` | `seed` | one of 8, 3–4 cards each | felipe | seed deck (condition M0) |
 | `E6-1` … `E6-6` | `paper` | `null` | felipe | the six openings of Wadhwa et al. (2026), paraphrased (condition E6) |
 | `CTRL-R-001` … `CTRL-R-030` | `control` | `null` | random | one random common noun each (condition R) |
+| `OB-G1-*` (13 cards) | `evolved` | one of 8 | muse-wonder-1.0 | evolution G1, reviewed by the author: record in [`evolution/G1/`](evolution/G1/) |
 
-All cards are generation 0. Opposite pairs (`opposite_of`, symmetric): OB-009/OB-010, OB-017/OB-018, OB-021/OB-022, OB-028/OB-029.
+Seed, paper and control cards are generation 0. Opposite pairs (`opposite_of`, symmetric): OB-009/OB-010, OB-017/OB-018, OB-021/OB-022, OB-028/OB-029.
 
 The `OB-*` and `E6-*` texts are the author's, transcribed word for word from the seed deck v0 list.
 

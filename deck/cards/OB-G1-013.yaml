@@ -1,0 +1,9 @@
+id: OB-G1-013
+text: "Use one document's anomaly to question the other document's certainty."
+family: error
+origin: evolved
+generation: 1
+parents: [OB-026, OB-027]
+opposite_of: []
+author: "muse-wonder-1.0"
+created: 2026-11-01

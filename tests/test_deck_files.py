@@ -13,13 +13,16 @@ from oblique.deck.controls import DECK_DIR, N_CONTROLS, control_cards, draw_word
 def test_committed_deck_loads_and_has_the_planned_composition():
     deck = load_deck(DECK_DIR)
     origins = Counter(c.origin for c in deck.values())
-    assert origins == {"seed": 30, "paper": 6, "control": 30}
+    assert origins == {"seed": 30, "paper": 6, "control": 30, "evolved": 13}
     families = Counter(c.family for c in deck.values() if c.origin == "seed")
     assert set(families) == set(Family) and min(families.values()) >= 3
     pairs = {frozenset((c.id, o)) for c in deck.values() for o in c.opposite_of}
     assert len(pairs) >= 4
     assert all(c.family is None for c in deck.values() if c.origin in ("paper", "control"))
-    assert all(c.generation == 0 for c in deck.values())
+    assert all(c.generation == (c.origin == "evolved") for c in deck.values())
+    allowed = {c.id for c in deck.values() if c.origin in ("seed", "paper")}
+    assert all(c.parents and set(c.parents) <= allowed for c in deck.values() if c.generation)
+    assert "OB-G1-011" not in deck and "OB-G1-014" not in deck
 
 
 def test_control_texts_are_single_distinct_words():
