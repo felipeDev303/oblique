@@ -128,15 +128,21 @@ class FakeAPI:
     """`sheet` and `idea` take the number of the call of that kind and may return text, None for
     the default reply, or an exception to raise."""
 
-    def __init__(self, sheet=None, idea=None, tokens=(1000, 0, 500)):
+    def __init__(self, sheet=None, idea=None, tokens=(1000, 0, 500), one_call=None):
         self.chat = self.completions = self
         self.requests = []
         self.sheet = sheet
         self.idea = idea
+        self.one_call = one_call
         self.tokens = tokens
 
     def of(self, system):
         return [r for r in self.requests if r["messages"][0]["content"] == system]
+
+    def one_calls(self):
+        return [
+            r for r in self.of(IDEA_SYSTEM) if "exactly 3 objects" in r["messages"][1]["content"]
+        ]
 
     async def create(self, **request):
         self.requests.append(request)
@@ -144,8 +150,12 @@ class FakeAPI:
             n = len(self.of(SHEET_SYSTEM))
             content = self.sheet(n) if self.sheet else None
             content = sheet_reply() if content is None else content
+        elif "exactly 3 objects" in request["messages"][1]["content"]:
+            content = self.one_call or json.dumps(
+                {"ideas": [json.loads(idea_reply(f"one-{i}"))["ideas"][0] for i in range(3)]}
+            )
         else:
-            n = len(self.of(IDEA_SYSTEM))
+            n = len(self.of(IDEA_SYSTEM)) - len(self.one_calls())
             content = self.idea(n) if self.idea else None
             content = idea_reply(str(n)) if content is None else content
         if isinstance(content, Exception):
@@ -183,9 +193,9 @@ def cfg(tmp_path):
     }
 
 
-def run_set(service, session="s", documents=DOCUMENTS):
+def run_set(service, session="s", documents=DOCUMENTS, **kw):
     async def go():
-        job = service.start(session, documents)
+        job = service.start(session, documents, **kw)
         await job.task
         return job
 
@@ -410,13 +420,67 @@ def test_contributor_and_control_decks_are_refused(cfg):
         ProductService(bad, transport=FakeAPI())
 
 
-def test_the_committed_config_uses_standard_fifty_pages_and_a_valid_deck():
+def test_the_committed_config_uses_standard_fifty_pages_and_the_deck_of_split_b():
     cfg = yaml.safe_load(Path("configs/product.yaml").read_text("utf-8"))
     assert cfg["generator"]["model"] == "muse-spark-1.3"
     assert (cfg["limits"]["min_documents"], cfg["limits"]["max_documents"]) == (2, 5)
     assert cfg["limits"]["max_pages_per_document"] == 50
     deck = load_deck(DECK_DIR)
-    assert all(deck[c].origin == "seed" for c in cfg["deck"]["cards"])
+    # ADR-011: the rule of ADR-010, amendment 3, gives E6, marked experimental.
+    assert cfg["deck"]["name"] == "E6" and cfg["deck"]["experimental"] is True
+    assert sorted(cfg["deck"]["cards"]) == sorted(c for c in deck if deck[c].origin == "paper")
+
+
+# --- views ----------------------------------------------------------------------------------
+
+
+def test_the_default_set_is_sequential_with_cards_and_no_one_call(cfg):
+    api = FakeAPI()
+    job = run_set(ProductService(cfg, transport=api, wait=wait_none()))
+    assert job.public()["view"] == "sequential" and job.public()["with_cards"] is True
+    assert api.one_calls() == [] and job.one_call == []
+    assert all("«" in r["messages"][1]["content"] for r in api.of(IDEA_SYSTEM))
+
+
+def test_with_cards_off_the_set_is_still_sequential_but_has_no_card(cfg):
+    api = FakeAPI()
+    job = run_set(ProductService(cfg, transport=api, wait=wait_none()), with_cards=False)
+    assert job.status == "done" and job.public()["with_cards"] is False
+    assert [i["card"] for i in job.ideas] == [None, None, None]
+    texts = [r["messages"][1]["content"] for r in api.of(IDEA_SYSTEM)]
+    assert len(texts) == 3 and not any("«" in t for t in texts)
+    assert "claim 1" in texts[1] and "claim 2" in texts[2]
+
+
+def test_side_by_side_adds_one_call_for_the_three_ideas_with_no_card(cfg):
+    api = FakeAPI()
+    service = ProductService(cfg, transport=api, wait=wait_none())
+    job = run_set(service, view="side_by_side")
+    assert job.status == "done"
+    (one,) = api.one_calls()
+    assert "«" not in one["messages"][1]["content"]
+    assert "<documents>" in one["messages"][1]["content"]
+    assert [i["status"] for i in job.one_call] == ["ok", "ok", "ok"]
+    assert [i["card"] for i in job.one_call] == [None, None, None]
+    assert job.one_call[2]["idea"]["core_claim"] == "claim one-2"
+    assert job.one_call[0]["sources"][0]["name"] == "a.pdf"
+    assert len(job.ideas) == 3 and all(i["card"] for i in job.ideas)
+    rows = [json.loads(line) for line in Path(cfg["ledger"]).read_text("utf-8").splitlines()]
+    assert [r["kind"] for r in rows].count("one_call") == 1
+    assert service.session("s").sets_started == 1
+
+
+def test_a_broken_one_call_fails_its_three_ideas_and_the_set_goes_on(cfg):
+    api = FakeAPI(one_call='{"ideas": []}')
+    job = run_set(ProductService(cfg, transport=api, wait=wait_none()), view="side_by_side")
+    assert [i["status"] for i in job.one_call] == ["invalid"] * 3
+    assert job.status == "done" and len(job.ideas) == 3
+
+
+def test_an_unknown_view_is_refused(cfg):
+    service = ProductService(cfg, transport=FakeAPI(), wait=wait_none())
+    with pytest.raises(ValueError, match="unknown view"):
+        run_set(service, view="both")
 
 
 # --- limits and spend -----------------------------------------------------------------------
@@ -528,11 +592,30 @@ def upload(client, files=PAIR):
 
 
 def test_page_and_status(cfg):
+    cfg["deck"] |= {"name": "E6", "experimental": True}
     with TestClient(create_app(cfg, transport=FakeAPI(), wait=wait_none())) as client:
-        assert "Bring your papers" in client.get("/").text
+        page = client.get("/").text
+        assert "Bring your papers" in page and "One call (K=3)" in page
         status = client.get("/api/status").json()
         assert status["sets_left"] == 2 and status["deck_note"] == "Provisional."
+        assert status["deck"] == "E6" and status["deck_experimental"] is True
         assert COOKIE in client.cookies
+
+
+def test_the_view_and_the_cards_come_from_the_form(cfg):
+    api = FakeAPI()
+    with TestClient(create_app(cfg, transport=api, wait=wait_none())) as client:
+        files = [("files", (name, data, "application/pdf")) for name, data in PAIR]
+        started = client.post(
+            "/api/sets", files=files, data={"view": "side_by_side", "cards": "off"}
+        )
+        body = wait_done(client, started.json()["id"])
+        assert body["view"] == "side_by_side" and body["with_cards"] is False
+        assert len(body["one_call"]) == 3 and len(body["ideas"]) == 3
+        refused = client.post("/api/sets", files=files, data={"view": "both"})
+        assert refused.status_code == 400
+        assert client.get("/api/status").json()["sets_left"] == 1
+    assert len(api.one_calls()) == 1
 
 
 def test_upload_then_poll_until_the_set_is_done(cfg):

@@ -7,6 +7,9 @@ of the prompt.
 ideation-sheets-v1 reads the sheets of 2-5 documents and writes one idea. It adds `sources`, which
 cite evidence by ID, so an idea can only point to a passage already checked against its PDF. It
 reuses the fixed text of sequential generation (ADR-009) and the card frame `inject-v1`.
+
+ideation-sheets-one-call-v1 asks for the K ideas in one call, with no card, for the side-by-side
+view. It shares the system text of ideation-sheets-v1.
 """
 
 from __future__ import annotations
@@ -90,6 +93,18 @@ IDEATION_SHEETS_V1 = Prompt(
     "ideation-sheets-v1", IDEA_SYSTEM, IDEA_USER, extra=(("sheet_block", SHEET_BLOCK),)
 )
 
+# The left column of the side-by-side view: the K ideas in one call with no card, as C1 in the
+# experiment, so the difference shown is the one measured as C1s - C1 on split B (ADR-011).
+ONE_CALL_USER = """<documents>
+{sheets}
+</documents>
+
+Propose {k} distinct research ideas based on these documents. The "ideas" array must contain exactly {k} objects."""
+
+IDEATION_SHEETS_ONE_CALL_V1 = Prompt(
+    "ideation-sheets-one-call-v1", IDEA_SYSTEM, ONE_CALL_USER, extra=(("sheet_block", SHEET_BLOCK),)
+)
+
 
 def document_sheet_messages(data: bytes) -> list[dict[str, Any]]:
     """One inline PDF for Chat Completions. Inline files are not stored by the provider."""
@@ -127,4 +142,11 @@ def idea_messages(
     return IDEATION_SHEETS_V1.messages(
         sheets="\n".join(render_sheet(s) for s in sheets),
         previous=render_previous(previous) + constraint,
+    )
+
+
+def one_call_messages(sheets: Sequence[Any], k: int) -> list[dict[str, str]]:
+    """The K ideas of a set in one call, with no card."""
+    return IDEATION_SHEETS_ONE_CALL_V1.messages(
+        sheets="\n".join(render_sheet(s) for s in sheets), k=str(k)
     )

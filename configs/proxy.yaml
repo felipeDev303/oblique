@@ -11,7 +11,7 @@ concurrency: 4
 max_tokens: 12000            # ceiling per call; a client's max_tokens can only lower it
 max_body_mb: 1
 
-# Optional: another deck for the proxy, instead of the provisional one in the app's config.
+# Optional: another deck for the proxy, instead of the one in the app's config.
 # deck:
 #   note: "Why this deck."
-#   cards: [E6-1, E6-2, E6-3, E6-4, E6-5, E6-6]
+#   cards: [OB-001, OB-004, OB-005]

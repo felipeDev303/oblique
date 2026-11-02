@@ -55,6 +55,7 @@ FROZEN = {
     "evolve-v1": "6c2488031a449422",
     "document-sheet-v1": "5a859e9d4a7ba6cd",
     "ideation-sheets-v1": "2a1d39776042a345",
+    "ideation-sheets-one-call-v1": "377fc46cce9f5489",
     "proxy-sequence-v1": "deb9767b71c34ae0",
 }
 
