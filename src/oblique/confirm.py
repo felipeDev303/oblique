@@ -40,12 +40,13 @@ from typing import Any
 import numpy as np
 import yaml
 
-from oblique.baseline import Baseline, K, ci_dict
+from oblique.baseline import SEQUENTIAL_SAMPLE_BASE, Baseline, K, ci_dict
 from oblique.bench import Instance, load_instances, split_ids
 from oblique.deck import Card, load_deck
 from oblique.deck.controls import DECK_DIR
-from oblique.generate.records import write_jsonl
-from oblique.generate.validate import InvalidReason
+from oblique.generate.records import records_from_set, write_jsonl
+from oblique.generate.validate import InvalidReason, provider_error_set
+from oblique.llm import Usage
 from oblique.metrics import paired_differences
 from oblique.metrics.bootstrap import bca_mean_ci, bootstrap_mean_ci
 from oblique.metrics.calibration import (
@@ -123,6 +124,10 @@ class ConfirmB(Baseline):
         self.decks: dict[str, list[str]] = cfg["decks"]
         self.no_card: dict[str, dict[str, Any]] = cfg["no_card"]
         self.ids = sorted(iid for iid, _ in split_ids(cfg["split"]))
+        # ADR-006, amendment 7: generations the provider failed in every attempt and launch.
+        self.provider_errors = {
+            (e["instance"], e["condition"], e["slot"]) for e in cfg.get("provider_errors", [])
+        }
 
     def new_client(self, provider: str, concurrency: int = 1, **kw: Any):
         return super().new_client(
@@ -192,6 +197,31 @@ class ConfirmB(Baseline):
         return sorted(load_instances(SPLIT), key=lambda x: x.id)
 
     # --- generation -----------------------------------------------------------
+
+    async def generate_call(
+        self, client, x, condition, k, sample_idx, previous=(), *, card=None, params=None
+    ):
+        """A generation listed as a provider error is not asked again (ADR-006, amendment 7)."""
+        slot = sample_idx - SEQUENTIAL_SAMPLE_BASE
+        if k != 1 or (x.id, condition, slot) not in self.provider_errors:
+            return await super().generate_call(
+                client, x, condition, k, sample_idx, previous, card=card, params=params
+            )
+        ideation = self.prompt("ideation")
+        prompt_hash = f"{ideation.hash}+{self.prompt('inject').hash}" if card else ideation.hash
+        self.progress["generations"] += 1
+        return records_from_set(
+            provider_error_set(1),
+            cards=[card.id if card else None],
+            run_id=self.run_id,
+            instance=x.id,
+            condition=condition,
+            model=self.cfg["generator"]["model"],
+            prompt_hash=prompt_hash,
+            seed=None,
+            call_key="provider_error",
+            usage=Usage(),
+        )
 
     async def generate(self, instances: list[Instance]) -> None:
         gen = self.cfg["generator"]
@@ -339,9 +369,20 @@ class ConfirmB(Baseline):
             "delta_q_ml_c1s_spark_same_ideas": difference("anchor"),
         }
 
+    def set_metrics(self, key, provider_error_as_invalid: bool = False) -> dict[str, Any]:
+        """A set with a provider error is incomplete, so its instance leaves the comparisons of that
+        condition; as a sensitivity analysis, the idea counts as invalid, q = 0 (amendment 7)."""
+        out = super().set_metrics(key)
+        if any(r.invalid_reason == InvalidReason.provider_error for r in self.slots[key]):
+            out["provider_error"] = True
+            if not provider_error_as_invalid:
+                out["complete"] = False
+        return out
+
     def regression_rows(self) -> list[dict[str, Any]]:
         """One row per judgment of this run. An invalid or filtered idea is two losses at equal
-        length; an idea missing one order is left out (ADR-003)."""
+        length; an idea missing one order is left out (ADR-003), and so is a provider error, which
+        has no judgment (ADR-006, amendment 7)."""
         rows: list[dict[str, Any]] = []
         for (iid, cond), records in sorted(self.slots.items()):
             anchor = self.anchors.get(iid)
@@ -349,6 +390,8 @@ class ConfirmB(Baseline):
                 continue
             for r in records:
                 verdict = self.verdicts["anchor"].get((iid, cond, r.slot))
+                if r.invalid_reason == InvalidReason.provider_error:
+                    continue
                 if not r.valid:
                     wins, delta = (False, False), 0
                 elif verdict is not None:
@@ -399,6 +442,19 @@ class ConfirmB(Baseline):
         def compare(a: str, b: str, metric: str = "cu") -> dict[str, Any] | None:
             return self.paired(by, metric, a, b, n_other)
 
+        as_invalid = [
+            self.set_metrics(k, provider_error_as_invalid=True) for k in sorted(self.slots)
+        ]
+        by_as_invalid = {
+            c: {r["instance"]: r for r in as_invalid if r["complete"] and r["condition"] == c}
+            for c in self.conditions
+        }
+        affected = any(
+            r.invalid_reason == InvalidReason.provider_error
+            for records in self.slots.values()
+            for r in records
+        )
+
         table = {}
         for cond in self.conditions:
             records = [r for (_, c), rs in self.slots.items() if c == cond for r in rs]
@@ -406,8 +462,13 @@ class ConfirmB(Baseline):
                 "sets_complete": len(by[cond]),
                 "ideas": len(records),
                 "invalid": sum(
-                    not r.valid and r.invalid_reason != InvalidReason.content_filtered
+                    not r.valid
+                    and r.invalid_reason
+                    not in (InvalidReason.content_filtered, InvalidReason.provider_error)
                     for r in records
+                ),
+                "provider_error": sum(
+                    r.invalid_reason == InvalidReason.provider_error for r in records
                 ),
                 "filtered": sum(
                     r.invalid_reason == InvalidReason.content_filtered for r in records
@@ -457,7 +518,19 @@ class ConfirmB(Baseline):
                 "delta_cu_strict_ml_c1s": compare("ML", "C1s", "cu_strict"),
                 "delta_cu_embed_ml_c1s": compare("ML", "C1s", "cu_embed"),
                 "wonder": self.wonder_report(n_other),
+                "provider_error_as_invalid": {
+                    "h3_cu_ml_ts": self.paired(by_as_invalid, "cu", "ML", "Ts", n_other),
+                    "h3_cu_ml_r": self.paired(by_as_invalid, "cu", "ML", "R", n_other),
+                }
+                if affected
+                else None,
             },
+            "provider_errors": [
+                {"instance": iid, "condition": cond, "slot": r.slot}
+                for (iid, cond), records in sorted(self.slots.items())
+                for r in records
+                if r.invalid_reason == InvalidReason.provider_error
+            ],
             "conditions": table,
             "length": {
                 "log_odds_per_10_words": h1_q["log_odds_per_unit"],
@@ -577,6 +650,10 @@ def _ci(cell: dict[str, Any] | None) -> str:
     return f"{cell['mean']:.3f} [{cell['lo']:.3f}, {cell['hi']:.3f}]" if cell else "n/a"
 
 
+def _ci_n(cell: dict[str, Any] | None) -> str:
+    return f"{_ci(cell)} (n = {cell['n']})" if cell else "n/a"
+
+
 def _agreement(cell: dict[str, Any] | None) -> str:
     return f"{cell['exact']:.1%}, kappa {cell['kappa']:.2f}" if cell else "n/a"
 
@@ -607,12 +684,12 @@ def render_summary(result: dict[str, Any]) -> str:
         "",
         "## Exploratory (post-map hypotheses are marked in ADR-010)",
         "",
-        f"- H3, CU(ML) - CU(Ts): {_ci(ex['h3_cu_ml_ts'])}",
-        f"- H3, CU(ML) - CU(R): {_ci(ex['h3_cu_ml_r'])}",
-        f"- H4, CU(MG) - CU(ML): {_ci(ex['h4_cu_mg_ml'])}",
-        f"- H6, CU(E6) - CU(C1s): {_ci(ex['h6_cu_e6_c1s'])}",
+        f"- H3, CU(ML) - CU(Ts): {_ci_n(ex['h3_cu_ml_ts'])}",
+        f"- H3, CU(ML) - CU(R): {_ci_n(ex['h3_cu_ml_r'])}",
+        f"- H4, CU(MG) - CU(ML): {_ci_n(ex['h4_cu_mg_ml'])}",
+        f"- H6, CU(E6) - CU(C1s): {_ci_n(ex['h6_cu_e6_c1s'])}",
         f"- H6, controlled q, E6 - C1s: {_ci(ex['h6_q_controlled_e6_c1s'])}",
-        f"- H7, CU(E6) - CU(ML): {_ci(ex['h7_cu_e6_ml'])}",
+        f"- H7, CU(E6) - CU(ML): {_ci_n(ex['h7_cu_e6_ml'])}",
         "",
         "## Sensitivity (does not decide H1)",
         "",
@@ -624,17 +701,26 @@ def render_summary(result: dict[str, Any]) -> str:
         f"{_agreement(wonder['agreement_per_order'])} per order.",
         f"- q, ML - C1s, on those ideas: Wonder {_ci(wonder['delta_q_ml_c1s_wonder'])}; "
         f"Spark {_ci(wonder['delta_q_ml_c1s_spark_same_ideas'])}.",
+        *(
+            [
+                f"- H3 with the provider error as q = 0 (ADR-006, amendment 7): CU(ML) - CU(Ts) "
+                f"{_ci_n(sens['provider_error_as_invalid']['h3_cu_ml_ts'])}."
+            ]
+            if sens["provider_error_as_invalid"]
+            else []
+        ),
         "",
         "## Conditions",
         "",
-        "| Condition | CU | q controlled | q raw | q gold | d | Grounding | Invalid | Filtered |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| Condition | Sets | CU | q controlled | q raw | q gold | d | Grounding | Invalid "
+        "| Filtered | Provider error |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for cond, c in result["conditions"].items():
         lines.append(
-            f"| {cond} | {_ci(c['cu'])} | {_ci(c['q_controlled'])} | {_ci(c['q'])} "
-            f"| {_ci(c['q_gold'])} | {_ci(c['d'])} "
-            f"| {_ci(c['grounding'])} | {c['invalid']} | {c['filtered']} |"
+            f"| {cond} | {c['sets_complete']} | {_ci(c['cu'])} | {_ci(c['q_controlled'])} "
+            f"| {_ci(c['q'])} | {_ci(c['q_gold'])} | {_ci(c['d'])} "
+            f"| {_ci(c['grounding'])} | {c['invalid']} | {c['filtered']} | {c['provider_error']} |"
         )
     return "\n".join(lines) + "\n"
 

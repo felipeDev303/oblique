@@ -31,6 +31,11 @@ map_metrics: runs/R-20261031-01/metrics.json
 g1_metrics: runs/R-20261102-01/metrics.json
 draws: configs/R-20261103-01.draws.json
 
+# ADR-006, amendment 7 (the author, 2026-11-02, before the judges and with no result in view): the
+# provider returned 500 in every transport retry and in 3 launches. Not asked again.
+provider_errors:
+  - {instance: i-4183, condition: Ts, slot: 2}
+
 # ADR-010, amendment 3: agreement only, it does not decide H1. The same positions in every condition.
 wonder:
   ideas_per_condition: 30

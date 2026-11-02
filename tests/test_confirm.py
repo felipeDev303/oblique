@@ -419,6 +419,48 @@ def test_the_generator_timeout_comes_from_the_config_and_not_the_cache_key(cfg, 
     )
 
 
+# --- provider errors -----------------------------------------------------------------------
+
+
+def test_a_provider_error_is_not_asked_and_its_instance_leaves_only_that_condition(
+    cfg, tmp_path, unsealed
+):
+    cfg["provider_errors"] = [{"instance": IDS[0], "condition": "Ts", "slot": 2}]
+    api = FakeAPI()
+    run = runner(cfg, tmp_path, api)
+    asyncio.run(run.run())
+    assert len(gens(api)) == len(IDS) * 2 + len(IDS) * 3 * 6 - 1
+    record = run.slots[(IDS[0], "Ts")][2]
+    assert record.invalid_reason == "provider_error" and not record.valid
+    result = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))
+    assert result["conditions"]["Ts"]["sets_complete"] == len(IDS) - 1
+    assert result["conditions"]["Ts"]["provider_error"] == 1
+    assert result["conditions"]["Ts"]["invalid"] == 0
+    assert result["conditions"]["ML"]["sets_complete"] == len(IDS)
+    assert result["exploratory"]["h3_cu_ml_ts"]["n"] == len(IDS) - 1
+    assert result["exploratory"]["h3_cu_ml_r"]["n"] == len(IDS)
+    assert result["h1"]["delta_cu_ml_c1s"]["n"] == len(IDS)
+    sensitivity = result["sensitivity"]["provider_error_as_invalid"]
+    assert sensitivity["h3_cu_ml_ts"]["n"] == len(IDS)
+    assert result["provider_errors"] == [{"instance": IDS[0], "condition": "Ts", "slot": 2}]
+    assert len(run.regression_rows()) == 2 * (len(IDS) * 3 * 7 - 1)
+    text = (tmp_path / "run" / "summary.md").read_text("utf-8")
+    assert "provider error as q = 0" in text and f"(n = {len(IDS) - 1})" in text
+
+
+def test_without_provider_errors_there_is_no_such_sensitivity(cfg, tmp_path, unsealed):
+    asyncio.run(runner(cfg, tmp_path, FakeAPI()).run())
+    result = json.loads((tmp_path / "run" / "metrics.json").read_text("utf-8"))
+    assert result["sensitivity"]["provider_error_as_invalid"] is None
+    assert result["provider_errors"] == []
+
+
+def test_the_committed_config_lists_the_provider_error_of_split_b():
+    with open(REAL_CONFIG, encoding="utf-8") as f:
+        c = yaml.safe_load(f)
+    assert c["provider_errors"] == [{"instance": "i-4183", "condition": "Ts", "slot": 2}]
+
+
 # --- once ----------------------------------------------------------------------------------
 
 
