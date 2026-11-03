@@ -4,6 +4,11 @@ Each PDF goes in its own call and becomes a sheet (title, summary, methods, limi
 evidence). The ideas are written over the sheets and never see a PDF, so the cost of a set grows
 with one read per document, not with three reads of every document.
 
+By default a set is sequential (ADR-009): K calls, each one under a card and reading the ideas
+before it, because on split B the sequential set beat the one-call set clearly (C1s - C1, ADR-011).
+The cards can be turned off. The side-by-side view adds one call that asks for the K ideas at once
+with no card, as C1 in the experiment, and shows it next to the sequential set.
+
 No judges and no metrics: the same generation core as the experiment, on the user's documents.
 Sets are generated with the Standard model, never Contributor, which would let Meta use the
 user's PDFs for training.
@@ -35,15 +40,23 @@ from oblique.product.documents import Document, Sheet, parse_sheet
 from oblique.product.spend import SpendLedger, call_cost
 from oblique.prompts.product import (
     DOCUMENT_SHEET_V1,
+    IDEATION_SHEETS_ONE_CALL_V1,
     IDEATION_SHEETS_V1,
     document_sheet_messages,
     idea_messages,
+    one_call_messages,
 )
 
 logger = logging.getLogger(__name__)
 
 K = 3
 MAX_JOBS_KEPT = 500
+VIEWS = ("sequential", "side_by_side")
+PROMPTS = {
+    "sheet": DOCUMENT_SHEET_V1,
+    "idea": IDEATION_SHEETS_V1,
+    "one_call": IDEATION_SHEETS_ONE_CALL_V1,
+}
 
 
 class LimitReached(Exception):
@@ -65,11 +78,12 @@ class DocumentCache(Cache):
         super().put(key, model=model, request={"model": model, "stored": False}, **kw)
 
 
-def parse_sources(content: str | None, sheets: list[Sheet]) -> dict[str, Any]:
-    """The sources of a K = 1 reply, resolved to the evidence of the sheets. A source that names no
-    such document or passage is dropped and counted: only a passage from a sheet can be shown."""
+def parse_sources(content: str | None, sheets: list[Sheet], index: int = 0) -> dict[str, Any]:
+    """The sources of idea `index` of a reply, resolved to the evidence of the sheets. A source that
+    names no such document or passage is dropped and counted: only a passage from a sheet can be
+    shown."""
     try:
-        items = json.loads(unfence(content or "")[0])["ideas"][0]["sources"]
+        items = json.loads(unfence(content or "")[0])["ideas"][index]["sources"]
     except (json.JSONDecodeError, KeyError, IndexError, TypeError):
         return {"sources": [], "rejected": 0}
     if not isinstance(items, list):
@@ -108,12 +122,14 @@ class Session:
 class Job:
     id: str
     session: str
-    cards: list[Card]
+    cards: list[Card | None]  # None in every slot when the cards are off
     documents: list[dict[str, Any]]
+    view: str = "sequential"  # sequential | side_by_side
     status: str = "running"  # running | done | limit | failed
-    phase: str = "reading"  # reading | ideas
+    phase: str = "reading"  # reading | one_call | ideas
     sheets: list[dict[str, Any]] = field(default_factory=list)
-    ideas: list[dict[str, Any]] = field(default_factory=list)
+    ideas: list[dict[str, Any]] = field(default_factory=list)  # the sequential set
+    one_call: list[dict[str, Any]] = field(default_factory=list)  # side by side only
     message: str | None = None
     task: asyncio.Task | None = None
 
@@ -125,8 +141,11 @@ class Job:
             "message": self.message,
             "documents": self.documents,
             "k": len(self.cards),
+            "view": self.view,
+            "with_cards": any(c is not None for c in self.cards),
             "sheets": self.sheets,
             "ideas": self.ideas,
+            "one_call": self.one_call,
         }
 
 
@@ -189,21 +208,33 @@ class ProductService:
             "max_file_mb": self.limits["max_file_mb"],
             "max_pages_per_document": self.limits["max_pages_per_document"],
             "model": self.gen["model"],
+            "deck": self.cfg["deck"].get("name"),
+            "deck_experimental": bool(self.cfg["deck"].get("experimental", False)),
             "deck_note": self.cfg["deck"]["note"],
         }
 
     # --- a set ----------------------------------------------------------------
 
-    def start(self, session_id: str, documents: list[Document]) -> Job:
+    def start(
+        self,
+        session_id: str,
+        documents: list[Document],
+        *,
+        view: str = "sequential",
+        with_cards: bool = True,
+    ) -> Job:
         """Everything before the first await, so concurrent requests cannot pass a limit."""
+        if view not in VIEWS:
+            raise ValueError(f"unknown view {view!r}")
         session = self.session(session_id)
         self.check_can_start(session)
         session.sets_started += 1
         job = Job(
             id=secrets.token_urlsafe(16),
             session=session_id,
-            cards=random.SystemRandom().sample(self.deck, K),
+            cards=random.SystemRandom().sample(self.deck, K) if with_cards else [None] * K,
             documents=[{"number": d.number, "name": d.name, "pages": d.pages} for d in documents],
+            view=view,
         )
         self.jobs[job.id] = job
         for old in [j for j in self.jobs.values() if j.status != "running"][:-MAX_JOBS_KEPT]:
@@ -225,11 +256,10 @@ class ProductService:
             u = c.usage
             cost = call_cost(u, self.price)
             session.spent_usd += cost
-            prompt = DOCUMENT_SHEET_V1 if kind == "sheet" else IDEATION_SHEETS_V1
             row = {
                 "key": c.key,
                 "kind": kind,
-                "prompt_hash": prompt.hash,
+                "prompt_hash": PROMPTS[kind].hash,
                 "tokens_in": u.tokens_in,
                 "tokens_cached": u.tokens_cached,
                 "tokens_out": u.tokens_out,
@@ -265,10 +295,10 @@ class ProductService:
         session: Session,
         sheets: list[Sheet],
         previous: list[IdeaCard],
-        card: Card,
+        card: Card | None,
     ) -> tuple[dict[str, Any], IdeaCard | None]:
-        shown = {"id": card.id, "text": card.text}
-        messages = idea_messages(sheets, previous, card.text)
+        shown = {"id": card.id, "text": card.text} if card else None
+        messages = idea_messages(sheets, previous, card.text if card else None)
         params = self.gen["params"]
         try:
             c = await self.call(session, "idea", messages, params, 0)
@@ -291,11 +321,41 @@ class ProductService:
             slot.idea,
         )
 
+    async def one_call(self, session: Session, sheets: list[Sheet]) -> list[dict[str, Any]]:
+        """The K ideas in one call, with no card. A broken set fails all K ideas (ADR-006)."""
+        messages = one_call_messages(sheets, K)
+        params = self.gen["params"]
+        try:
+            c = await self.call(session, "one_call", messages, params, 0)
+            parsed = parse_set(c.content, K)
+            if parsed.retryable:  # ADR-006: one retry, json_error only
+                c = await self.call(session, "one_call", messages, params, 1)
+                parsed = parse_set(c.content, K)
+        except ContentFilteredError:
+            return [{"card": None, "status": "filtered"} for _ in range(K)]
+        out = []
+        for i, slot in enumerate(parsed.slots):
+            if slot.idea is None:
+                out.append({"card": None, "status": "invalid"})
+                continue
+            out.append(
+                {
+                    "card": None,
+                    "status": "ok",
+                    "idea": slot.idea.model_dump(),
+                    **parse_sources(c.content, sheets, i),
+                }
+            )
+        return out
+
     async def run(self, job: Job, session: Session, documents: list[Document]) -> None:
         previous: list[IdeaCard] = []
         try:
             sheets = await self.read_all(session, documents)
             job.sheets = [s.public() for s in sheets]
+            if job.view == "side_by_side":
+                job.phase = "one_call"
+                job.one_call = await self.one_call(session, sheets)
             job.phase = "ideas"
             for card in job.cards:
                 shown, idea = await self.one_idea(session, sheets, previous, card)
@@ -311,5 +371,5 @@ class ProductService:
         except Exception:
             logger.exception("set %s failed", job.id)
             job.status, job.message = "failed", "The model call failed. Please try again."
-            if not job.ideas:
+            if not job.ideas and not job.one_call:
                 session.sets_started -= 1  # nothing delivered: it does not count against the user

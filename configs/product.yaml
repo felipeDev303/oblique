@@ -26,9 +26,11 @@ limits:
   budget_usd: 10.00          # no new call past this across all sessions and restarts
   max_running_sets: 2
 
-# ADR-010: the deck of the product is chosen after split B (ML, E6 or MG). Until then, ML from the
-# map (R-20261031-01) stands in, and the page says so. Change only this list to swap it.
+# The rule of ADR-010, amendment 3, applied after split B (ADR-011, runs/R-20261103-01/summary.md):
+# ML, MG and E6 all missed the non-inferiority of controlled q against C1s, so the deck is the one
+# with the highest controlled Δq, E6, marked experimental on the page.
 deck:
-  note: "Provisional deck: the final one is chosen after the confirmation run."
-  cards: [OB-001, OB-004, OB-005, OB-007, OB-008, OB-009, OB-011, OB-012, OB-013,
-          OB-016, OB-018, OB-020, OB-022, OB-023, OB-025, OB-026, OB-027, OB-029]
+  name: E6
+  experimental: true
+  note: "Experimental deck: on split B no deck was shown to keep the quality of the sequential set without cards."
+  cards: [E6-1, E6-2, E6-3, E6-4, E6-5, E6-6]

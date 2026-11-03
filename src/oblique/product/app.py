@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from oblique.product.documents import UploadError, load_documents
-from oblique.product.service import Busy, LimitReached, ProductService
+from oblique.product.service import VIEWS, Busy, LimitReached, ProductService
 from oblique.smoke import load_env
 
 COOKIE = "oblique_session"
@@ -59,14 +59,22 @@ def create_app(cfg: dict[str, Any], *, transport: Any = None, wait: Any = None) 
         return service.status(request.state.session)
 
     @app.post("/api/sets", status_code=202)
-    async def create_set(request: Request, files: list[UploadFile]) -> dict[str, Any]:
+    async def create_set(
+        request: Request,
+        files: list[UploadFile],
+        view: str = Form("sequential"),
+        cards: str = Form("on"),
+    ) -> dict[str, Any]:
         session = request.state.session
+        if view not in VIEWS or cards not in ("on", "off"):
+            raise HTTPException(status_code=400, detail="Unknown view or card setting.")
         try:
             # Limits first, so a session that has used its sets does not make the server read PDFs.
             service.check_can_start(service.session(session))
             uploads = [(f.filename, await f.read()) for f in files]
             documents = await asyncio.to_thread(load_documents, uploads, limits)
-            return service.start(session, documents).public()
+            job = service.start(session, documents, view=view, with_cards=cards == "on")
+            return job.public()
         except UploadError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         except (LimitReached, Busy) as e:

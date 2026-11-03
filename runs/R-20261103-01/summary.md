@@ -42,3 +42,37 @@ Grounding, ML - C1s: -0.105 [-0.150, -0.060]; threshold -0.1. Reported; it does 
 | E6 | 49 | 0.441 [0.372, 0.509] | 0.501 [0.408, 0.589] | 0.510 [0.422, 0.602] | 0.922 [0.864, 0.973] | 0.642 [0.620, 0.661] | 0.696 [0.662, 0.730] | 0 | 0 | 0 |
 | ML | 49 | 0.424 [0.350, 0.495] | 0.474 [0.377, 0.565] | 0.483 [0.388, 0.578] | 0.932 [0.867, 0.980] | 0.659 [0.642, 0.676] | 0.670 [0.634, 0.706] | 0 | 0 | 0 |
 | MG | 49 | 0.438 [0.377, 0.489] | 0.487 [0.412, 0.557] | 0.486 [0.408, 0.558] | 0.922 [0.854, 0.976] | 0.637 [0.620, 0.653] | 0.718 [0.687, 0.748] | 0 | 0 | 0 |
+
+## Post-B exploratory (ADR-011)
+
+Written after this run was read, from its stored records, with no model call. 2,000 resamples. None of it was pre-registered.
+
+- Controlled q, MG - C1s: 0.019 [-0.062, 0.104]
+
+C1s - C1 (sequential set against one call), paired:
+
+- CU: 0.240 [0.170, 0.311] (n = 49)
+- Controlled q: 0.262 [0.158, 0.352]
+- q against the gold: 0.051 [0.010, 0.099] (n = 49)
+- d: -0.000 [-0.023, 0.023] (n = 49); with embeddings -0.035 [-0.057, -0.013]
+
+d within the set, against C1s:
+
+| Condition | Δd | Δd embeddings |
+|---|---|---|
+| R | -0.001 [-0.024, 0.019] (n = 49) | 0.010 [-0.012, 0.030] |
+| E6 | 0.001 [-0.022, 0.021] (n = 49) | 0.017 [-0.004, 0.037] |
+| ML | 0.018 [-0.002, 0.040] (n = 49) | 0.009 [-0.017, 0.032] |
+| MG | -0.005 [-0.024, 0.013] (n = 49) | 0.005 [-0.016, 0.026] |
+
+Product deck (ADR-010, amendment 3; guard on the mean, ADR-011):
+
+| Deck | ΔCU vs C1s | Controlled Δq | Lower bound | Non-inferior | Mean Δgrounding | Guard |
+|---|---|---|---|---|---|---|
+| ML | 0.020 | 0.006 | -0.090 | no | -0.105 | no |
+| MG | 0.034 | 0.019 | -0.062 | no | -0.058 | yes |
+| E6 | 0.037 | 0.033 | -0.056 | no | -0.080 | yes |
+
+**Deck: E6**, marked experimental: no deck passed both checks, so the rule takes the highest controlled Δq.
+
+All three decks use the same 2,000 resamples here, so the lower bound for ML differs a little from the one in H1, which uses 10,000.
