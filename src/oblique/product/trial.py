@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 from oblique.product.app import create_app
 
 POLL_SECONDS = 2.0
+USER_AGENT = "oblique-hackathon/0.1"  # a project identifier, never personal data (CLAUDE.md)
 SET_TIMEOUT_SECONDS = 1200.0
 
 
@@ -35,7 +36,9 @@ def fetch(paper: dict[str, Any], directory: Path) -> tuple[str, bytes]:
     path = directory / name
     if not path.exists():
         url = f"https://arxiv.org/pdf/{paper['arxiv_id']}{paper['version']}"
-        response = httpx.get(url, follow_redirects=True, timeout=120)
+        response = httpx.get(
+            url, headers={"User-Agent": USER_AGENT}, follow_redirects=True, timeout=120
+        )
         response.raise_for_status()
         directory.mkdir(parents=True, exist_ok=True)
         path.write_bytes(response.content)
