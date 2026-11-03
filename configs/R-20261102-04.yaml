@@ -11,10 +11,12 @@ pdf_dir: data/trial          # not committed: each PDF stays available from arXi
 host: 127.0.0.1
 port: 8000
 
-# The two accepted papers of R-20261102-02; licenses read from arXiv's OAI metadata on 2026-11-02.
+# The two accepted papers of R-20261102-02; licenses read from arXiv's OAI metadata on 2026-11-02,
+# first authors from the arXiv abstract pages on 2026-11-03. The example papers of the app come
+# from this trial (python -m oblique.product.examples).
 papers:
-  - {arxiv_id: "2307.03109", version: v9, license: CC BY 4.0, pages: 45, role: accepted, title: "A Survey on Evaluation of Large Language Models"}
-  - {arxiv_id: "2305.03726", version: v2, license: CC BY 4.0, pages: 17, role: accepted, title: "Otter: A Multi-Modal Model with In-Context Instruction Tuning"}
+  - {arxiv_id: "2307.03109", version: v9, license: CC BY 4.0, pages: 45, role: accepted, title: "A Survey on Evaluation of Large Language Models", authors: "Yupeng Chang et al."}
+  - {arxiv_id: "2305.03726", version: v2, license: CC BY 4.0, pages: 17, role: accepted, title: "Otter: A Multi-Modal Model with In-Context Instruction Tuning", authors: "Bo Li et al."}
 
 sets:
   - {name: side-by-side, view: side_by_side, cards: "on"}

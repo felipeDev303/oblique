@@ -2,6 +2,10 @@
 cache: .cache/product.db     # separate from the experiment; never holds the PDFs (DocumentCache)
 ledger: runs/product/ledger.jsonl
 page: web/product/index.html
+
+# "Try with 2 example papers": two CC BY papers whose sheets and one-call set were computed in
+# advance (R-20261102-04); only the sequential set is generated live.
+example: examples/papers/example.json
 host: 127.0.0.1
 port: 8000
 

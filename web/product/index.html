@@ -35,6 +35,9 @@
   blockquote { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--line); }
   .unchecked { color: var(--warn); }
   a { color: var(--accent); }
+  .example { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+  .example button { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .example ul { margin: 8px 0 0; padding-left: 18px; }
 </style>
 </head>
 <body>
@@ -54,6 +57,12 @@
     </fieldset>
     <button id="go" type="submit">Propose three ideas</button>
     <p id="limits" class="muted" style="margin:12px 0 0"></p>
+    <div id="example" class="example" hidden>
+      <button id="try" type="button">Try with 2 example papers</button>
+      <p class="muted" style="margin:8px 0 0">No PDFs at hand? Use two open-access papers from arXiv, both under CC BY 4.0, with the view and cards chosen above:</p>
+      <ul id="example-papers" class="muted"></ul>
+      <p id="example-note" class="muted" style="margin:8px 0 0"></p>
+    </div>
   </form>
   <p id="error" role="alert"></p>
   <p id="progress" class="muted" role="status"></p>
@@ -83,6 +92,20 @@ async function refreshLimits() {
   if (s.deck_experimental) $("limits").append(el("span", "experimental", "badge"));
   $("limits").append(`${s.min_documents}–${s.max_documents} PDFs, up to ${s.max_file_mb} MB and ${s.max_pages_per_document} pages each. Sets left in this session: ${s.sets_left}. Model: ${s.model}. Deck: ${s.deck || "custom"}. ${s.deck_note}`);
   $("go").disabled = s.sets_left === 0;
+  $("try").disabled = s.sets_left === 0;
+  $("example").hidden = !s.example;
+  if (s.example) {
+    $("example-papers").replaceChildren(...s.example.papers.map(p => {
+      const item = el("li");
+      const link = el("a", `arXiv:${p.arxiv_id}${p.version}`);
+      link.href = p.url;
+      link.rel = "noopener";
+      link.target = "_blank";
+      item.append(link, ` · ${p.authors}, “${p.title}” · ${p.license}`);
+      return item;
+    }));
+    $("example-note").textContent = s.example.precomputed;
+  }
 }
 
 function renderSheet(sheet) {
@@ -158,13 +181,12 @@ function fail(e) {
   refreshLimits();
 }
 
-$("form").addEventListener("submit", async (event) => {
-  event.preventDefault();
+async function startSet(example) {
   $("error").textContent = "";
   const sideBySide = $("form").elements.view.value === "side_by_side";
   const withCards = $("cards").checked;
   const sequential = `Oblique sequential (${withCards ? "with cards" : "no cards"})`;
-  $("one-call").replaceChildren(el("h3", "One call (K=3)"));
+  $("one-call").replaceChildren(el("h3", example ? "One call (K=3), generated in advance" : "One call (K=3)"));
   $("one-call").hidden = !sideBySide;
   $("ideas").replaceChildren(el("h3", sequential));
   $("columns").className = sideBySide ? "two" : "";
@@ -174,20 +196,27 @@ $("form").addEventListener("submit", async (event) => {
   oneCallShown = false;
   sheetsShown = false;
   $("go").disabled = true;
-  $("progress").textContent = "Uploading.";
+  $("try").disabled = true;
+  $("progress").textContent = example ? "Starting with the example papers." : "Uploading.";
   const body = new FormData();
-  for (const file of $("files").files) body.append("files", file);
+  if (!example) for (const file of $("files").files) body.append("files", file);
   body.append("view", sideBySide ? "side_by_side" : "sequential");
   body.append("cards", withCards ? "on" : "off");
   try {
-    const response = await fetch("/api/sets", { method: "POST", body });
+    const response = await fetch(example ? "/api/examples" : "/api/sets", { method: "POST", body });
     const data = await response.json();
-    if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The upload was refused.");
+    if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "The request was refused.");
     await poll(data.id);
   } catch (e) {
     fail(e);
   }
+}
+
+$("form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  startSet(false);
 });
+$("try").addEventListener("click", () => startSet(true));
 
 refreshLimits();
 </script>

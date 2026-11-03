@@ -16,7 +16,8 @@ Upload 2–5 PDFs (up to 50 pages each). Each one is read on its own into a shee
 
 - Model: Muse Spark 1.3, Standard pricing, which does not train on your content.
 - PDFs are sent inline, stay in memory only for the set and are never written to disk.
-- Each session has a limit of sets and spend, and the whole Space stops at a global budget.
+- No PDFs at hand? "Try with 2 example papers" uses two CC BY 4.0 papers from arXiv (2307.03109v9 and 2305.03726v2). Their sheets and the one-call column were generated in advance; the sequential set is generated live.
+- Each session has a limit of sets and spend, and the whole Space stops at a global budget of US$20.
 - The deck is marked experimental: on the confirmation split, no deck was shown to keep the quality of the sequential set without cards.
 
 Code, method and results: the project's GitHub repository. Results page: `/results/`.

@@ -1,0 +1,266 @@
+{
+ "source_run": "R-20261102-04",
+ "model": "muse-spark-1.3",
+ "prompts": {
+  "sheet": "5a859e9d4a7ba6cd",
+  "one_call": "377fc46cce9f5489"
+ },
+ "papers": [
+  {
+   "number": 1,
+   "name": "2307.03109v9.pdf",
+   "pages": 45,
+   "arxiv_id": "2307.03109",
+   "version": "v9",
+   "title": "A Survey on Evaluation of Large Language Models",
+   "authors": "Yupeng Chang et al.",
+   "license": "CC BY 4.0",
+   "url": "https://arxiv.org/abs/2307.03109v9"
+  },
+  {
+   "number": 2,
+   "name": "2305.03726v2.pdf",
+   "pages": 17,
+   "arxiv_id": "2305.03726",
+   "version": "v2",
+   "title": "Otter: A Multi-Modal Model with In-Context Instruction Tuning",
+   "authors": "Bo Li et al.",
+   "license": "CC BY 4.0",
+   "url": "https://arxiv.org/abs/2305.03726v2"
+  }
+ ],
+ "sheets": [
+  {
+   "document": 1,
+   "name": "2307.03109v9.pdf",
+   "title": "A Survey on Evaluation of Large Language Models",
+   "summary": "This survey reviews evaluation of large language models along what to evaluate, where to evaluate, and how to evaluate. It covers natural language processing, reasoning, robustness, ethics, bias, trustworthiness, social and natural science, medicine, agents, education and other applications, plus benchmarks and automatic versus human protocols. It finds LLMs excel at fluent generation, understanding, arithmetic and logical reasoning, QA and translation, but fail at semantic understanding, abstract and complex reasoning, non-Latin and low-resource languages, factuality, robustness and bias. It proposes grand challenges including AGI benchmarks, dynamic, principled and unified evaluation.",
+   "methods": "Literature survey organizing prior work into three dimensions, categorizing tasks, compiling 46 popular benchmarks into general, specific and multi-modal groups, and summarizing automatic metrics and human evaluation criteria and novel protocols.",
+   "limitations": "No single benchmark or protocol is shown most useful; conclusions depend on specific datasets. Results evolve as models improve, new limitations may arise, and the rapidly developing literature means some new papers or benchmarks may be missed.",
+   "evidence": [
+    {
+     "id": "E1",
+     "quote": "focusing on three key dimensions: what to evaluate, where to evaluate, and how to evaluate.",
+     "found": true
+    },
+    {
+     "id": "E2",
+     "quote": "As depicted in Figure 1, we explore existing work in three dimensions:",
+     "found": true
+    },
+    {
+     "id": "E3",
+     "quote": "we compile a selection of 46 popular benchmarks, as shown in Table 7.",
+     "found": true
+    },
+    {
+     "id": "E4",
+     "quote": "In summary, the performance of LLMs in semantic understanding tasks is poor.",
+     "found": true
+    },
+    {
+     "id": "E5",
+     "quote": "contemporary LLMs are vulnerable to adversarial prompts",
+     "found": true
+    },
+    {
+     "id": "E6",
+     "quote": "evaluation should be treated as an essential discipline to better assist the development of LLMs.",
+     "found": true
+    },
+    {
+     "id": "E7",
+     "quote": "there is no evidence to explicitly show that one certain evaluation protocol or",
+     "found": true
+    },
+    {
+     "id": "E8",
+     "quote": "Finally, the evaluation of LLMs is continuously developing, thus we may miss some new papers",
+     "found": true
+    }
+   ]
+  },
+  {
+   "document": 2,
+   "name": "2305.03726v2.pdf",
+   "title": "Otter: A Multi-Modal Model with In-Context Instruction Tuning",
+   "summary": "The document introduces Otter, a large multimodal assistant built on Flamingo/OpenFlamingo that uses both textual and visual in-context examples for instruction tuning, and the MIMIC-IT dataset with over 3 million multimodal instruction-response pairs and ~2.2 million unique instructions across images and videos. It finds in-context instruction tuning substantially enhances convergence and generalization, enabling Otter to excel at complex video and multi-image understanding and to outperform recent open-sourced LMMs on image and video benchmarks.",
+   "methods": "Built on pretrained OpenFlamingo-9B with MPT-7B decoder and CLIP ViT-L/14, training only perceiver resampler and cross-gated attention. Curated MIMIC-IT via ChatGPT self-instruct Syphus pipeline with retrieval and video clips.",
+   "limitations": "Concedes Otter still has limitations on fine-grained OCR due to low-resolution 224x224 vision encoder, potential PII and bias in public data, and ChatGPT generation errors requiring cleaning and future work on visual perception.",
+   "evidence": [
+    {
+     "id": "E1",
+     "quote": "we introduce the Otter model to leverage both textual and visual in-context examples for instruction tuning.",
+     "found": true
+    },
+    {
+     "id": "E2",
+     "quote": "Otter builds upon Flamingo with Perceiver architecture, and has been instruction tuned for general purpose multi-modal assistant.",
+     "found": true
+    },
+    {
+     "id": "E3",
+     "quote": "which encompasses over 3 million multi-modal instruction-response pairs, including approximately 2.2 million unique instructions across a broad spectrum of images and videos.",
+     "found": true
+    },
+    {
+     "id": "E4",
+     "quote": "We built Otter model based on a pretrained OpenFlamingo-9B.",
+     "found": false
+    },
+    {
+     "id": "E5",
+     "quote": "we only train the perceiver resampler and cross-gated attention modules within the pretrained OpenFlamingo-9B,",
+     "found": true
+    },
+    {
+     "id": "E6",
+     "quote": "that instruction tuning with these in-context examples substantially enhances model convergence and generalization capabilities.",
+     "found": true
+    },
+    {
+     "id": "E7",
+     "quote": "yet it still has limitations in certain scenarios like fine-grained OCR tasks due to the relatively",
+     "found": true
+    },
+    {
+     "id": "E8",
+     "quote": "low-res (224×224) of the pretrained vision encoder.",
+     "found": true
+    }
+   ]
+  }
+ ],
+ "one_call": [
+  {
+   "card": null,
+   "status": "ok",
+   "idea": {
+    "problem_gap": "[Scope Mismatch] Text-centric LLM evaluation frameworks have not been validated for multimodal in-context instruction-tuned assistants like Otter.",
+    "core_claim": "Otter-style models will show different rankings under text-only versus multimodal in-context evaluation across semantic understanding and reasoning tasks.",
+    "method": "[Relax / Extend Scope] Extend survey's what-where-how taxonomy to multimodal in-context settings and benchmark Otter on 46-benchmark subset plus video multi-image tasks.",
+    "inspiration": "Combines survey's three-dimension evaluation organization and 46 benchmarks with Otter's textual-visual in-context tuning and reported generalization gains for video multi-image understanding."
+   },
+   "sources": [
+    {
+     "document": 1,
+     "name": "2307.03109v9.pdf",
+     "evidence": "E1",
+     "quote": "focusing on three key dimensions: what to evaluate, where to evaluate, and how to evaluate.",
+     "found": true
+    },
+    {
+     "document": 1,
+     "name": "2307.03109v9.pdf",
+     "evidence": "E3",
+     "quote": "we compile a selection of 46 popular benchmarks, as shown in Table 7.",
+     "found": true
+    },
+    {
+     "document": 2,
+     "name": "2305.03726v2.pdf",
+     "evidence": "E1",
+     "quote": "we introduce the Otter model to leverage both textual and visual in-context examples for instruction tuning.",
+     "found": true
+    },
+    {
+     "document": 2,
+     "name": "2305.03726v2.pdf",
+     "evidence": "E6",
+     "quote": "that instruction tuning with these in-context examples substantially enhances model convergence and generalization capabilities.",
+     "found": true
+    }
+   ],
+   "rejected": 0
+  },
+  {
+   "card": null,
+   "status": "ok",
+   "idea": {
+    "problem_gap": "[Failure / Risk Gap] Low-resolution encoders cause OCR failures and adversarial prompt vulnerability remains unaddressed in open multimodal assistants.",
+    "core_claim": "Increasing vision resolution beyond 224x224 and adversarial visual instruction tuning will eliminate most fine-grained OCR errors without harming generalization.",
+    "method": "[Robustification] Train perceiver-resampler variants with higher-resolution encoders on adversarial OCR-focused MIMIC-IT slices and stress-test with perturbed prompts and tiny text.",
+    "inspiration": "Combines Otter's low-res 224x224 OCR limitation and perceiver-only training with survey's finding of poor semantic understanding and vulnerability to adversarial prompts."
+   },
+   "sources": [
+    {
+     "document": 2,
+     "name": "2305.03726v2.pdf",
+     "evidence": "E7",
+     "quote": "yet it still has limitations in certain scenarios like fine-grained OCR tasks due to the relatively",
+     "found": true
+    },
+    {
+     "document": 2,
+     "name": "2305.03726v2.pdf",
+     "evidence": "E8",
+     "quote": "low-res (224×224) of the pretrained vision encoder.",
+     "found": true
+    },
+    {
+     "document": 2,
+     "name": "2305.03726v2.pdf",
+     "evidence": "E5",
+     "quote": "we only train the perceiver resampler and cross-gated attention modules within the pretrained OpenFlamingo-9B,",
+     "found": true
+    },
+    {
+     "document": 1,
+     "name": "2307.03109v9.pdf",
+     "evidence": "E4",
+     "quote": "In summary, the performance of LLMs in semantic understanding tasks is poor.",
+     "found": true
+    },
+    {
+     "document": 1,
+     "name": "2307.03109v9.pdf",
+     "evidence": "E5",
+     "quote": "contemporary LLMs are vulnerable to adversarial prompts",
+     "found": true
+    }
+   ],
+   "rejected": 0
+  },
+  {
+   "card": null,
+   "status": "ok",
+   "idea": {
+    "problem_gap": "[Evidence Gap] No direct evidence shows which automatic versus human protocol best captures in-context multimodal instruction-tuning gains.",
+    "core_claim": "Human evaluation will rank in-context-tuned Otter higher than automatic metrics do, revealing systematic underestimation of multimodal coherence and instruction following.",
+    "method": "[Empirical Mapping] Systematically compare automatic metrics and human protocols on MIMIC-IT outputs, testing convergence, generalization, and dynamic evaluation needs across image-video tasks.",
+    "inspiration": "Merges survey's finding that no protocol is proven best and evaluation must be dynamic with Otter's 3M-pair dataset and claim of enhanced convergence and generalization."
+   },
+   "sources": [
+    {
+     "document": 1,
+     "name": "2307.03109v9.pdf",
+     "evidence": "E7",
+     "quote": "there is no evidence to explicitly show that one certain evaluation protocol or",
+     "found": true
+    },
+    {
+     "document": 1,
+     "name": "2307.03109v9.pdf",
+     "evidence": "E6",
+     "quote": "evaluation should be treated as an essential discipline to better assist the development of LLMs.",
+     "found": true
+    },
+    {
+     "document": 2,
+     "name": "2305.03726v2.pdf",
+     "evidence": "E3",
+     "quote": "which encompasses over 3 million multi-modal instruction-response pairs, including approximately 2.2 million unique instructions across a broad spectrum of images and videos.",
+     "found": true
+    },
+    {
+     "document": 2,
+     "name": "2305.03726v2.pdf",
+     "evidence": "E6",
+     "quote": "that instruction tuning with these in-context examples substantially enhances model convergence and generalization capabilities.",
+     "found": true
+    }
+   ],
+   "rejected": 0
+  }
+ ]
+}
