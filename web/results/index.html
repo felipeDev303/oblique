@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oblique results</title>
+<style>
+  :root {
+    color-scheme: light;
+    --plane: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --plane: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plane: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--plane); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.15rem; margin: 0 0 4px; }
+  p { margin: 0 0 12px; }
+  a { color: var(--s1); }
+  .muted { color: var(--ink-2); font-size: .9rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 16px; margin: 24px 0; }
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 12px; }
+  .panel h3 { font-size: .9rem; font-weight: 600; margin: 0; }
+  .panel svg { max-width: 380px; }
+  .delta { font-size: .9rem; color: var(--ink-2); margin: 4px 0 0; font-variant-numeric: tabular-nums; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  svg text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); }
+  svg text.ink { fill: var(--ink); }
+  svg text.ink2 { fill: var(--ink-2); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 12px 0 0; font-size: .85rem; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .tip { position: fixed; pointer-events: none; z-index: 10; max-width: 300px; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: .85rem; box-shadow: 0 4px 16px rgba(0,0,0,.18); display: none; }
+  .tip b { display: block; }
+  .tip .num { font-variant-numeric: tabular-nums; color: var(--ink-2); }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--ink-2); font-size: .9rem; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; font-size: .85rem; margin-top: 8px; width: 100%; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.text { white-space: normal; min-width: 220px; }
+  .hit { fill: transparent; cursor: default; }
+  .hit:focus { outline: none; }
+  .focus-ring { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+</style>
+</head>
+<body>
+<main>
+  <p class="muted"><a href="../">← Bring your papers</a></p>
+  <h1>Oblique results</h1>
+  <p class="muted">From the stored metrics of the runs, with no model call. Intervals are 95% bootstrap CIs over benchmark instances.</p>
+
+  <section class="card" aria-labelledby="c1-title">
+    <h2 id="c1-title">One call against one idea at a time</h2>
+    <p class="muted" id="c1-sub"></p>
+    <div class="panels" id="c1-panels"></div>
+    <div class="legend" id="c1-legend"></div>
+    <details>
+      <summary>Table view</summary>
+      <div class="table-wrap"><table id="c1-table"></table></div>
+    </details>
+  </section>
+
+  <section class="card" aria-labelledby="map-title">
+    <h2 id="map-title">Map of the deck: quality × distance per card</h2>
+    <p class="muted" id="map-sub"></p>
+    <div id="map"></div>
+    <div class="legend" id="map-legend"></div>
+    <details>
+      <summary>Table view</summary>
+      <div class="table-wrap"><table id="map-table"></table></div>
+    </details>
+  </section>
+</main>
+<div class="tip" id="tip" role="tooltip"></div>
+<script src="data.js"></script>
+<script>
+const R = window.RESULTS;
+const NS = "http://www.w3.org/2000/svg";
+const fmt = (v, signed) => {
+  const r = Math.abs(v) < 5e-4 ? 0 : v;
+  return (signed && r > 0 ? "+" : "") + r.toFixed(3).replace("-", "−");
+};
+const tick = v => {
+  const r = Math.round(v * 100) / 100;
+  return r === 0 ? "0" : (r > 0 ? "+" : "−") + String(Math.abs(r)).replace(/^0/, "0");
+};
+const theme = new URLSearchParams(location.search).get("theme");
+if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+const ci = (c, signed) => `${fmt(c.mean, signed)} [${fmt(c.lo, signed)}, ${fmt(c.hi, signed)}]`;
+
+function svg(tag, attrs, parent) {
+  const node = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+  if (parent) parent.append(node);
+  return node;
+}
+function label(parent, x, y, text, attrs) {
+  const t = svg("text", { x, y, ...attrs }, parent);
+  t.textContent = text;
+  return t;
+}
+function el(tag, text, cls) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (cls) node.className = cls;
+  return node;
+}
+
+// --- tooltip -----------------------------------------------------------------------------
+const tip = document.getElementById("tip");
+function showTip(event, lines) {
+  tip.replaceChildren(...lines);
+  tip.style.display = "block";
+  const box = tip.getBoundingClientRect();
+  const x = event.clientX ?? (event.target.getBoundingClientRect().left + 12);
+  const y = event.clientY ?? event.target.getBoundingClientRect().top;
+  tip.style.left = Math.min(x + 14, window.innerWidth - box.width - 8) + "px";
+  tip.style.top = Math.max(8, y - box.height - 12) + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+
+// --- chart 1: C1 against C1s ------------------------------------------------------------
+const SERIES = [
+  { key: "C1s", name: "One idea at a time, no cards (C1s)", color: "var(--s1)" },
+  { key: "C1", name: "One call for three ideas (C1)", color: "var(--s2)" },
+];
+const METRICS = [
+  ["cu", "Creative Utility"],
+  ["q_controlled", "Quality, controlled for length"],
+  ["d", "Distance within the set (LLM judge)"],
+];
+
+function drawC1() {
+  const data = R.c1_vs_c1s;
+  document.getElementById("c1-sub").textContent =
+    `Split B (${data.run}), ${data.conditions.C1s.sets} complete sets per condition. Δ is the paired difference C1s − C1, ${data.n_boot.toLocaleString("en")} resamples.`;
+  const panels = document.getElementById("c1-panels");
+  panels.replaceChildren();
+  for (const [metric, title] of METRICS) {
+    const panel = el("div", undefined, "panel");
+    panel.append(el("h3", title));
+    const W = 300, H = 104, left = 40, right = 12, top = 10, rowH = 30;
+    const s = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+      "aria-label": `${title}: ` + SERIES.map(sr => `${sr.key} ${ci(data.conditions[sr.key][metric])}`).join("; ") }, panel);
+    const x = v => left + v * (W - left - right);
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      svg("line", { x1: x(t), x2: x(t), y1: top, y2: top + rowH * 2 + 4, stroke: "var(--grid)", "stroke-width": 1 }, s);
+      label(s, x(t), top + rowH * 2 + 20, t === 0 ? "0" : String(t), { "text-anchor": "middle" });
+    }
+    SERIES.forEach((sr, i) => {
+      const c = data.conditions[sr.key][metric];
+      const y = top + rowH * i + rowH / 2;
+      label(s, left - 8, y + 4, sr.key, { "text-anchor": "end", class: "ink" });
+      svg("line", { x1: x(c.lo), x2: x(c.hi), y1: y, y2: y, stroke: sr.color, "stroke-width": 2, "stroke-linecap": "round" }, s);
+      svg("circle", { cx: x(c.mean), cy: y, r: 5, fill: sr.color, stroke: "var(--surface)", "stroke-width": 2 }, s);
+      label(s, x(c.hi) + 6, y + 4, c.mean.toFixed(3), { class: "ink2" });
+      const hit = svg("rect", { x: left, y: y - rowH / 2, width: W - left - right, height: rowH, class: "hit", tabindex: 0 }, s);
+      const lines = () => [el("b", sr.name), el("span", `${title}: ${ci(c)}`, "num")];
+      hit.addEventListener("mousemove", e => showTip(e, lines()));
+      hit.addEventListener("focus", e => showTip(e, lines()));
+      hit.addEventListener("mouseleave", hideTip);
+      hit.addEventListener("blur", hideTip);
+    });
+    const delta = data.delta[metric];
+    panel.append(el("p", `Δ ${ci(delta, true)}`, "delta"));
+    panels.append(panel);
+  }
+  const extra = data.delta.d_embed;
+  panels.lastChild.append(el("p", `With embeddings: Δ ${ci(extra, true)}`, "delta"));
+  const legend = document.getElementById("c1-legend");
+  legend.replaceChildren(...SERIES.map(sr => {
+    const item = el("span");
+    const sw = svg("svg", { width: 12, height: 12, viewBox: "0 0 12 12", "aria-hidden": "true" });
+    sw.style.width = "12px";
+    svg("circle", { cx: 6, cy: 6, r: 5, fill: sr.color }, sw);
+    item.append(sw, sr.name);
+    return item;
+  }));
+  const table = document.getElementById("c1-table");
+  table.replaceChildren();
+  const head = table.insertRow();
+  for (const h of ["Metric", "C1s", "C1", "Δ C1s − C1"]) head.append(el("th", h));
+  for (const [metric, title] of [...METRICS, ["q_gold", "Quality against the gold"], ["d_embed", "Distance, embeddings"]]) {
+    const row = table.insertRow();
+    row.append(el("td", title));
+    for (const k of ["C1s", "C1"]) row.append(el("td", data.conditions[k][metric] ? ci(data.conditions[k][metric]) : "—"));
+    row.append(el("td", ci(data.delta[metric], true)));
+  }
+}
+
+// --- chart 2: the map --------------------------------------------------------------------
+const BANDS = [
+  { key: "liminal", name: "Liminal", color: "var(--s1)" },
+  { key: "inert", name: "Inert", color: "var(--s3)" },
+  { key: "destructive", name: "Destructive", color: "var(--s2)" },
+];
+const ORIGINS = { seed: "Seed card", paper: "Paper card (E6)", control: "Random-noun control", no_card: "C2-T (temperature, no card)" };
+
+function marker(parent, origin, x, y, color) {
+  if (origin === "paper") {
+    return svg("path", { d: `M${x},${y - 6} L${x + 6},${y + 4.5} L${x - 6},${y + 4.5} Z`, fill: color, stroke: "var(--surface)", "stroke-width": 2 }, parent);
+  }
+  if (origin === "control") {
+    return svg("circle", { cx: x, cy: y, r: 4.5, fill: "var(--surface)", stroke: color, "stroke-width": 2 }, parent);
+  }
+  if (origin === "no_card") {
+    return svg("rect", { x: x - 5, y: y - 5, width: 10, height: 10, fill: color, stroke: "var(--surface)", "stroke-width": 2 }, parent);
+  }
+  return svg("circle", { cx: x, cy: y, r: 5, fill: color, stroke: "var(--surface)", "stroke-width": 2 }, parent);
+}
+
+function drawMap() {
+  const data = R.map;
+  const delta = data.delta;
+  document.getElementById("map-sub").textContent =
+    `Split A (${data.run}), one idea per card and instance. Each point is a card against C2 (a second sample without card, at the origin): controlled Δq up, Δd to the right. Bands from ADR-003, δ = ${delta}: destructive when the whole Δq interval is below −δ; liminal when the whole Δd interval is above 0; inert otherwise. Whiskers are the CIs.`;
+  const host = document.getElementById("map");
+  host.replaceChildren();
+  const width = Math.max(320, Math.min(host.clientWidth || 960, 1000));
+  const narrow = width < 560;
+  const W = width, H = narrow ? 420 : 520;
+  const m = { left: 52, right: 16, top: 16, bottom: 44 };
+  const pts = data.cards;
+  const xs = pts.flatMap(p => [p.dd.lo, p.dd.hi]).concat([0]);
+  const ys = pts.flatMap(p => [p.dq.lo, p.dq.hi]).concat([0, -delta]);
+  const pad = (a, b) => [a - (b - a) * 0.04, b + (b - a) * 0.04];
+  const [x0, x1] = pad(Math.min(...xs), Math.max(...xs));
+  const [y0, y1] = pad(Math.min(...ys), Math.max(...ys));
+  const X = v => m.left + (v - x0) / (x1 - x0) * (W - m.left - m.right);
+  const Y = v => m.top + (y1 - v) / (y1 - y0) * (H - m.top - m.bottom);
+  const s = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Scatter of controlled Δq against Δd per card; the table view lists every value." }, host);
+
+  const step = 0.1;
+  for (let t = Math.ceil(y0 / step) * step; t <= y1; t += step) {
+    svg("line", { x1: m.left, x2: W - m.right, y1: Y(t), y2: Y(t), stroke: "var(--grid)" }, s);
+    label(s, m.left - 6, Y(t) + 4, tick(t), { "text-anchor": "end" });
+  }
+  for (let t = Math.ceil(x0 / step) * step; t <= x1; t += step) {
+    svg("line", { x1: X(t), x2: X(t), y1: m.top, y2: H - m.bottom, stroke: "var(--grid)" }, s);
+    label(s, X(t), H - m.bottom + 16, tick(t), { "text-anchor": "middle" });
+  }
+  svg("line", { x1: m.left, x2: W - m.right, y1: Y(0), y2: Y(0), stroke: "var(--axis)", "stroke-width": 1.5 }, s);
+  svg("line", { x1: X(0), x2: X(0), y1: m.top, y2: H - m.bottom, stroke: "var(--axis)", "stroke-width": 1.5 }, s);
+  svg("line", { x1: m.left, x2: W - m.right, y1: Y(-delta), y2: Y(-delta), stroke: "var(--ink-2)", "stroke-width": 1, "stroke-dasharray": "4 4" }, s);
+  label(s, W - m.right - 4, Y(-delta) - 6, narrow ? `−δ = −${delta}` : `−δ = −${delta}: destructive threshold`, { "text-anchor": "end", class: "ink2" });
+  label(s, m.left + (W - m.left - m.right) / 2, H - 6, "Δd against C2 (more distant →)", { "text-anchor": "middle", class: "ink2" });
+  label(s, 14, m.top + (H - m.top - m.bottom) / 2, "Controlled Δq against C2 (better ↑)", { "text-anchor": "middle", class: "ink2", transform: `rotate(-90 14 ${m.top + (H - m.top - m.bottom) / 2})` });
+
+  const whiskers = svg("g", { opacity: 0.35 }, s);
+  const marks = svg("g", {}, s);
+  const color = p => p.origin === "no_card" ? "var(--ink)" : BANDS.find(b => b.key === p.band).color;
+  const order = [...pts].sort((a, b) => (a.origin === "no_card") - (b.origin === "no_card"));
+  const groups = new Map();
+  for (const p of order) {
+    const c = color(p);
+    const g = svg("g", {}, whiskers);
+    svg("line", { x1: X(p.dd.lo), x2: X(p.dd.hi), y1: Y(p.dq.mean), y2: Y(p.dq.mean), stroke: c, "stroke-width": 1.5 }, g);
+    svg("line", { x1: X(p.dd.mean), x2: X(p.dd.mean), y1: Y(p.dq.lo), y2: Y(p.dq.hi), stroke: c, "stroke-width": 1.5 }, g);
+    marker(marks, p.origin, X(p.dd.mean), Y(p.dq.mean), c);
+    groups.set(p.id, g);
+  }
+  // C2 at the origin.
+  svg("path", { d: `M${X(0) - 6},${Y(0)} h12 M${X(0)},${Y(0) - 6} v12`, stroke: "var(--ink)", "stroke-width": 2.5 }, marks);
+  label(s, X(0) + 8, Y(0) + 16, "C2", { class: "ink" });
+  const c2t = pts.find(p => p.id === "C2-T");
+  if (c2t) label(s, X(c2t.dd.mean) + 9, Y(c2t.dq.mean) - 8, "C2-T", { class: "ink" });
+
+  const ring = svg("circle", { r: 10, class: "focus-ring", display: "none" }, s);
+  const hits = svg("g", {}, s);
+  for (const p of order) {
+    const hit = svg("circle", { cx: X(p.dd.mean), cy: Y(p.dq.mean), r: 12, class: "hit", tabindex: 0,
+      "aria-label": `${p.id}, ${p.band}: Δq ${ci(p.dq, true)}, Δd ${ci(p.dd, true)}` }, hits);
+    const on = e => {
+      groups.get(p.id).setAttribute("opacity", "1");
+      groups.get(p.id).parentNode.append(groups.get(p.id));
+      whiskers.setAttribute("opacity", "1");
+      for (const [id, g] of groups) g.setAttribute("opacity", id === p.id ? "1" : "0.25");
+      ring.setAttribute("cx", X(p.dd.mean)); ring.setAttribute("cy", Y(p.dq.mean)); ring.removeAttribute("display");
+      const band = p.band + (p.confirmed ? " (confirmed)" : "") + (data.ml.includes(p.id) ? " · in ML" : "");
+      const lines = [el("b", p.id), el("span", band, "num")];
+      if (p.text) lines.splice(1, 0, el("div", p.text));
+      lines.push(el("div", `Δq ${ci(p.dq, true)}`, "num"), el("div", `Δd ${ci(p.dd, true)}`, "num"));
+      showTip(e, lines);
+    };
+    const off = () => {
+      whiskers.setAttribute("opacity", "0.35");
+      for (const g of groups.values()) g.setAttribute("opacity", "1");
+      ring.setAttribute("display", "none");
+      hideTip();
+    };
+    hit.addEventListener("mousemove", on);
+    hit.addEventListener("focus", on);
+    hit.addEventListener("mouseleave", off);
+    hit.addEventListener("blur", off);
+  }
+
+  const legend = document.getElementById("map-legend");
+  const swatch = (draw) => {
+    const sw = svg("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" });
+    sw.style.width = "14px";
+    draw(sw);
+    return sw;
+  };
+  const items = BANDS.map(b => {
+    const item = el("span");
+    const n = pts.filter(p => p.band === b.key && p.origin !== "no_card").length;
+    item.append(swatch(sw => svg("circle", { cx: 7, cy: 7, r: 5, fill: b.color }, sw)), `${b.name} (${n})`);
+    return item;
+  });
+  for (const [origin, name] of Object.entries(ORIGINS)) {
+    const item = el("span");
+    item.append(swatch(sw => marker(sw, origin, 7, 7.5, origin === "no_card" ? "var(--ink)" : "var(--ink-2)")), name);
+    items.push(item);
+  }
+  const c2 = el("span");
+  c2.append(swatch(sw => svg("path", { d: "M1,7 h12 M7,1 v12", stroke: "var(--ink)", "stroke-width": 2.5 }, sw)), "C2 (reference, origin)");
+  items.push(c2);
+  legend.replaceChildren(...items);
+
+  const table = document.getElementById("map-table");
+  table.replaceChildren();
+  const head = table.insertRow();
+  for (const h of ["Card", "Text", "Band", "Controlled Δq", "Δd", "In ML"]) head.append(el("th", h));
+  const sorted = [...pts].sort((a, b) => b.dd.mean - a.dd.mean);
+  for (const p of sorted) {
+    const row = table.insertRow();
+    row.append(el("td", p.id), el("td", p.text || "No card, temperature 1.5", "text"),
+      el("td", p.band + (p.confirmed ? " (confirmed)" : "")), el("td", ci(p.dq, true)), el("td", ci(p.dd, true)),
+      el("td", data.ml.includes(p.id) ? "yes" : ""));
+  }
+}
+
+drawC1();
+drawMap();
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawMap, 150); });
+</script>
+</body>
+</html>

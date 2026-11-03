@@ -4,6 +4,15 @@
 
 Listens on localhost by default. There are no accounts: before exposing it, keep in mind that the
 session limit is a cookie, and only the budget in the config is a hard stop.
+
+Exposed (`configs/space.yaml`, Hugging Face Spaces), two settings matter:
+- `persistent_dir`: the ledger must live there, or the budget would restart from zero with every
+  restart of the container. The app refuses to start if that directory does not exist.
+- `cookie_cross_site`: the Space page shows the app inside an iframe of another site, where a
+  `SameSite=Lax` cookie is not sent, so every request would be a new session. The cookie then goes
+  out as `SameSite=None; Secure; Partitioned`.
+
+The results page (`web/results/`) is served at `/results/`, when the directory exists.
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ from typing import Any
 import yaml
 from fastapi import FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from oblique.product.documents import UploadError, load_documents
 from oblique.product.service import VIEWS, Busy, LimitReached, ProductService
@@ -32,6 +42,10 @@ def create_app(cfg: dict[str, Any], *, transport: Any = None, wait: Any = None) 
     max_body = limits["max_documents"] * limits["max_file_mb"] * 1_000_000 + OVERHEAD_BYTES
     app = FastAPI(title="Oblique", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.service = service
+    cross_site = bool(cfg.get("cookie_cross_site"))
+    results = Path(cfg.get("results_dir", "web/results"))
+    if results.is_dir():
+        app.mount("/results", StaticFiles(directory=results, html=True), name="results")
 
     @app.middleware("http")
     async def session_and_body_limit(request: Request, call_next):
@@ -46,7 +60,15 @@ def create_app(cfg: dict[str, Any], *, transport: Any = None, wait: Any = None) 
         is_new = session_id is None
         request.state.session = session_id or secrets.token_urlsafe(24)
         response: Response = await call_next(request)
-        if is_new:
+        if is_new and cross_site:
+            # Written by hand: Starlette sets `Partitioned` only on Python 3.14 and later. The
+            # value is URL-safe base64, so it needs no quoting.
+            response.headers.append(
+                "set-cookie",
+                f"{COOKIE}={request.state.session}; Path=/; HttpOnly; Secure; SameSite=None; "
+                "Partitioned",
+            )
+        elif is_new:
             response.set_cookie(COOKIE, request.state.session, httponly=True, samesite="lax")
         return response
 
@@ -90,6 +112,20 @@ def create_app(cfg: dict[str, Any], *, transport: Any = None, wait: Any = None) 
     return app
 
 
+def check_persistent(cfg: dict[str, Any]) -> None:
+    """With `persistent_dir`, the ledger must be inside it and the directory must exist."""
+    if "persistent_dir" not in cfg:
+        return
+    base = Path(cfg["persistent_dir"])
+    if not base.is_dir():
+        raise SystemExit(
+            f"{base} does not exist: without persistent storage the budget would restart from zero "
+            "on every restart. Enable it, or remove persistent_dir from the config to accept that."
+        )
+    if not Path(cfg["ledger"]).resolve().is_relative_to(base.resolve()):
+        raise SystemExit(f"the ledger must be inside {base}")
+
+
 def main(argv: list[str]) -> None:
     if len(argv) != 1:
         raise SystemExit("usage: python -m oblique.product.app configs/product.yaml")
@@ -97,6 +133,7 @@ def main(argv: list[str]) -> None:
 
     load_env()
     cfg = yaml.safe_load(Path(argv[0]).read_text(encoding="utf-8"))
+    check_persistent(cfg)
     uvicorn.run(create_app(cfg), host=cfg.get("host", "127.0.0.1"), port=cfg.get("port", 8000))
 
 

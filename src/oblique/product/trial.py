@@ -6,6 +6,9 @@
 2. Generates a set from the two accepted papers, and reports the real cost of each call.
 3. Generates a second set from the same papers: the sheets come from the cache.
 
+With `sets` in the config, it runs those sets instead (each with its `view` and `cards`), for
+example the side-by-side view, and keeps each set as the page received it in `sets.json`.
+
 The PDFs go in `pdf_dir`, which is not committed. The summary keeps IDs and licenses.
 """
 
@@ -45,8 +48,12 @@ def ledger_rows(path: Path) -> list[dict[str, Any]]:
     )
 
 
-def upload(client: TestClient, files: list[tuple[str, bytes]]) -> httpx.Response:
-    return client.post("/api/sets", files=[("files", (n, d, "application/pdf")) for n, d in files])
+def upload(
+    client: TestClient, files: list[tuple[str, bytes]], form: dict[str, str] | None = None
+) -> httpx.Response:
+    return client.post(
+        "/api/sets", files=[("files", (n, d, "application/pdf")) for n, d in files], data=form
+    )
 
 
 def wait_for_set(client: TestClient, job_id: str) -> dict[str, Any]:
@@ -59,10 +66,15 @@ def wait_for_set(client: TestClient, job_id: str) -> dict[str, Any]:
     raise TimeoutError(f"set {job_id} did not finish")
 
 
-def one_set(client: TestClient, ledger: Path, files: list[tuple[str, bytes]]) -> dict[str, Any]:
+def one_set(
+    client: TestClient,
+    ledger: Path,
+    files: list[tuple[str, bytes]],
+    form: dict[str, str] | None = None,
+) -> dict[str, Any]:
     before = len(ledger_rows(ledger))
     started = time.monotonic()
-    response = upload(client, files)
+    response = upload(client, files, form)
     if response.status_code != 202:
         return {"http_status": response.status_code, "detail": response.json()["detail"]}
     body = wait_for_set(client, response.json()["id"])
@@ -76,6 +88,8 @@ def one_set(client: TestClient, ledger: Path, files: list[tuple[str, bytes]]) ->
         "cost_usd": sum(c["cost_usd"] for c in calls),
         "sheets": body["sheets"],
         "ideas": body["ideas"],
+        "one_call": body.get("one_call", []),
+        "page": body,
     }
 
 
@@ -115,6 +129,80 @@ def render_summary(cfg: dict[str, Any], result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_sets_summary(cfg: dict[str, Any], result: dict[str, Any]) -> str:
+    lines = [f"# {cfg['run_id']} · Trial of bring your papers, side by side", "", "## Papers", ""]
+    lines += ["| arXiv | License | Pages | Title |", "|---|---|---|---|"]
+    for p in cfg["papers"]:
+        lines.append(
+            f"| {p['arxiv_id']}{p['version']} | {p['license']} | {p['pages']} | {p['title']} |"
+        )
+    lines += [
+        "",
+        "PDFs are not redistributed here; each one is available from arXiv under its license.",
+        f"Deck: {cfg['deck'].get('name', 'custom')}"
+        + (" (experimental)." if cfg["deck"].get("experimental") else "."),
+        "",
+        "## Cost and time",
+        "",
+        "| Set | View | Cards | Status | Seconds | Kind | Calls | In | Cached | Out | US$ |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for spec, run in zip(cfg["sets"], result["sets"], strict=True):
+        calls = run.get("paid_calls", [])
+        for kind in ("sheet", "one_call", "idea"):
+            mine = [c for c in calls if c["kind"] == kind]
+            if not mine:
+                continue
+            lines.append(
+                f"| {spec['name']} | {spec['view']} | {spec['cards']} "
+                f"| {run.get('status', run.get('detail'))} | {run.get('seconds', '')} | {kind} "
+                f"| {len(mine)} | {sum(c['tokens_in'] for c in mine)} "
+                f"| {sum(c['tokens_cached'] for c in mine)} | {sum(c['tokens_out'] for c in mine)} "
+                f"| {sum(c['cost_usd'] for c in mine):.4f} |"
+            )
+    lines += ["", f"Total: US${result['total_usd']:.4f}.", ""]
+    for spec, run in zip(cfg["sets"], result["sets"], strict=True):
+        lines += [f"## Set {spec['name']}", ""]
+        columns = [
+            ("One call (K=3)", run.get("one_call", [])),
+            ("Oblique sequential", run.get("ideas", [])),
+        ]
+        for title, ideas in columns:
+            if not ideas:
+                continue
+            lines += [f"### {title}", ""]
+            for i, item in enumerate(ideas, 1):
+                card = item["card"]["id"] if item.get("card") else "no card"
+                if item["status"] != "ok":
+                    lines.append(f"{i}. ({card}) {item['status']}")
+                    continue
+                sources = ", ".join(f"{s['name']} {s['evidence']}" for s in item["sources"])
+                lines.append(
+                    f"{i}. ({card}) {item['idea']['core_claim']} Sources: {sources or 'none'}."
+                )
+            lines.append("")
+    return "\n".join(lines)
+
+
+def run_sets(cfg: dict[str, Any], accepted: list[tuple[str, bytes]], out: Path) -> None:
+    ledger = Path(cfg["ledger"])
+    result: dict[str, Any] = {"sets": []}
+    with TestClient(create_app(cfg)) as client:
+        for spec in cfg["sets"]:
+            form = {"view": spec["view"], "cards": spec["cards"]}
+            run = one_set(client, ledger, accepted, form)
+            result["sets"].append(run)
+            print(
+                spec["name"], run.get("status"), run.get("seconds"), run.get("cost_usd"), flush=True
+            )
+    result["total_usd"] = sum(c["cost_usd"] for c in ledger_rows(ledger))
+    pages = [run.pop("page", None) for run in result["sets"]]
+    (out / "sets.json").write_text(json.dumps(pages, indent=2, ensure_ascii=False), "utf-8")
+    (out / "metrics.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), "utf-8")
+    (out / "summary.md").write_text(render_sets_summary(cfg, result), "utf-8", newline="\n")
+    print(f"total US${result['total_usd']:.4f}", flush=True)
+
+
 def main(argv: list[str]) -> None:
     if len(argv) != 1:
         raise SystemExit("usage: python -m oblique.product.trial configs/R-*.yaml")
@@ -123,9 +211,12 @@ def main(argv: list[str]) -> None:
     papers = {p["role"]: [] for p in cfg["papers"]}
     for p in cfg["papers"]:
         papers[p["role"]].append(fetch(p, directory))
-    accepted, long_paper = papers["accepted"], papers["long"]
+    accepted, long_paper = papers["accepted"], papers.get("long")
     out = Path("runs") / cfg["run_id"]
     out.mkdir(parents=True, exist_ok=True)
+    if "sets" in cfg:
+        run_sets(cfg, accepted, out)
+        return
     ledger = Path(cfg["ledger"])
     result: dict[str, Any] = {}
     with TestClient(create_app(cfg)) as client:
@@ -142,6 +233,8 @@ def main(argv: list[str]) -> None:
         result["first"] = one_set(client, ledger, accepted)
         print("first:", result["first"].get("status"), result["first"].get("cost_usd"), flush=True)
         result["second"] = one_set(client, ledger, accepted)
+        for run in (result["first"], result["second"]):
+            run.pop("page", None)
         print(
             "second:", result["second"].get("status"), result["second"].get("cost_usd"), flush=True
         )
