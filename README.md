@@ -82,6 +82,25 @@ print(answer.model_extra["oblique"]["cards_used"])
 - It shares one ledger and one budget with the "bring your papers" app (`configs/product.yaml`). The deck is configurable in `configs/proxy.yaml`, and the default is the app's (E6, experimental).
 - Identical requests can return the cached answer at no cost. The cache keeps responses, not requests.
 
+## Results page
+
+`web/results/` is a static page built from the stored metrics, with no model call: C1 against C1s on split B, and the quality × distance map of every card on split A with its band, C2 and C2-T. The app serves it at `/results/`, and it also opens from disk. To rebuild its data:
+
+```bash
+uv run python -m oblique.export.results runs/R-20261103-01 runs/R-20261031-01
+```
+
+## Hugging Face Space
+
+Only the "bring your papers" app goes to the Space, with `configs/space.yaml`: Muse Spark Standard, the E6 deck, the same per-session limits, and a global cap of US$10 (no new call past US$9.70). The ledger lives on the Space's persistent storage at `/data`. Without that storage the app refuses to start, because the cap would restart from zero on every restart.
+
+```bash
+uv run python deploy/space/build.py dist/space        # only the app: no .env, data or runs
+hf upload <user>/<space> dist/space . --repo-type space
+```
+
+The API key is a Space secret, `MODEL_API_KEY`, never a file. The page sets its session cookie as `SameSite=None; Secure; Partitioned`, so the session also holds inside the Space's iframe.
+
 ## Built during the hackathon
 
 <!-- Updated daily. Everything in this repository was written during the event. -->
@@ -136,6 +155,12 @@ print(answer.model_extra["oblique"]["cards_used"])
 - Confirmation on split B (R-20261103-01, US$3.34, 7,617 calls, 7 conditions over 50 new instances). H1 is inconclusive: CU(ML) − CU(C1s) is +0.020 [−0.053, 0.094] and controlled q is +0.006 [−0.091, 0.100], so the lower bound falls past the −0.05 margin. ML loses grounding against C1s (−0.105), past the guard. One generation failed with a persistent provider error (ADR-006, amendment 7), and the content filter blocked 13 judgments of one instance, which leaves the paired comparisons with n = 49. Results in [`runs/R-20261103-01/summary.md`](runs/R-20261103-01/summary.md).
 - Analyses after split B (ADR-011, `python -m oblique.post_b`): from the stored records of the run, with no model call. The rebuilt state must reproduce the run's own sets and regression before anything new is computed. They add controlled q for MG − C1s, C1s − C1, d within the set against C1s and the product deck rule. The deck that comes out is E6, marked experimental.
 - "Bring your papers" writes sequential sets by default with the E6 deck, marked experimental on the page, and the cards can be turned off. A side-by-side view puts one call for three ideas with no card (K=3) next to the Oblique sequential set.
+
+### Nov 3 (Day 9)
+
+- Real trial of the side-by-side view (R-20261102-04, two CC BY papers from arXiv): one call (K=3) against Oblique sequential with E6 cost US$0.23 in 121 s, sheets included (US$0.17 of it). Results in [`runs/R-20261102-04/summary.md`](runs/R-20261102-04/summary.md).
+- Results page (`web/results/`, served at `/results/` and linked from the app), from stored metrics only.
+- Deployment to a Hugging Face Space (`deploy/space/`): a Docker image with only the app, the ledger on persistent storage, and a global cap of US$10.
 
 ## License
 
