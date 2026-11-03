@@ -3,7 +3,10 @@
 Upload limits come first: page count, not file size, is what sets the cost of a call. A PDF past
 the page limit is refused whole, with no call and no charge, so the reader knows it was not read.
 Documents live in memory only for the set being generated. Their local text is used only to look
-for the quotes of each sheet.
+for the quotes of each sheet, and to run a quote on to the end of its sentence for display.
+
+What the page shows is not what the model reads: the model cites passages as E1, E2..., and the
+page calls them P1, P2... and names each document by a short title instead of "Document N".
 """
 
 from __future__ import annotations
@@ -22,6 +25,12 @@ from oblique.prompts import JudgeOutputError
 from oblique.prompts.base import parse_json_object
 
 MAX_EVIDENCE = 10
+MAX_COMPLETION_WORDS = 40  # past this, a passage ends in "…" instead of its sentence's end
+SHORT_TITLE_CHARS = 36
+# A sentence ends at . ! or ? (and a closing quote or bracket) before a capital, a digit or the end.
+SENTENCE_END = re.compile(r"[.!?][\"”’)\]]*(?=\s+[A-Z0-9(\[“\"]|\s*$)")
+ABBREVIATIONS = ("e.g", "i.e", "et al", "al", "fig", "figs", "eq", "eqs", "vs", "etc", "cf", "sec")
+DOCUMENT_REFERENCE = re.compile(r"\b[Dd]oc(?:ument)?s?\.?\s*#?(\d+)(?:\s*(?:and|&|,)\s*#?(\d+))?")
 
 
 class UploadError(ValueError):
@@ -34,7 +43,8 @@ class Document:
     name: str
     data: bytes
     pages: int
-    text: str
+    text: str  # normalized, to look for quotes
+    cased: str = ""  # the same text with its case, to complete passages
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,20 @@ class Evidence:
     id: str
     quote: str
     found: bool  # the quote is in the text extracted locally from the PDF
+    passage: str = ""  # the quote run on to the end of its sentence, or ending in "…"
+
+    @property
+    def label(self) -> str:
+        return "P" + self.id.removeprefix("E")
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "quote": self.quote,
+            "passage": self.passage or complete_passage(self.quote, ""),
+            "found": self.found,
+        }
 
 
 @dataclass(frozen=True)
@@ -54,15 +78,20 @@ class Sheet:
     limitations: str
     evidence: tuple[Evidence, ...]
 
+    @property
+    def short(self) -> str:
+        return short_title(self.title)
+
     def public(self) -> dict[str, Any]:
         return {
             "document": self.number,
             "name": self.name,
             "title": self.title,
+            "short": self.short,
             "summary": self.summary,
             "methods": self.methods,
             "limitations": self.limitations,
-            "evidence": [vars(e) for e in self.evidence],
+            "evidence": [e.public() for e in self.evidence],
         }
 
 
@@ -90,13 +119,89 @@ def clean_name(name: str | None, number: int) -> str:
     return base[:120] or f"document-{number}.pdf"
 
 
+def tidy(text: str) -> str:
+    """Joins hyphenated line ends and collapses spacing, keeping case."""
+    return re.sub(r"\s+", " ", re.sub(r"-\s*\n\s*", "", text)).strip()
+
+
 def normalize(text: str) -> str:
     """For comparing a quote with the text of a PDF: joins hyphenated line ends and ignores case
     and spacing, because extraction rarely keeps either as printed."""
-    return re.sub(r"\s+", " ", re.sub(r"-\s*\n\s*", "", text)).strip().lower()
+    return tidy(text).lower()
+
+
+def _ends_sentence(text: str) -> bool:
+    return text.rstrip('"”’)]').endswith((".", "!", "?"))
+
+
+def complete_passage(quote: str, cased: str) -> str:
+    """The quote run on to the end of its sentence in the document's text, if that is near; else the
+    quote ending in "…" when it stops mid-sentence. Display only: the model reads the quote."""
+    q = tidy(quote)
+    if _ends_sentence(q):
+        return q
+    lowered = cased.lower()
+    at = lowered.find(q.lower()) if len(lowered) == len(cased) else -1
+    if at >= 0:
+        end = at + len(q)
+        rest = cased[end : end + 600]
+        for m in SENTENCE_END.finditer(rest):
+            before = rest[: m.start()].rsplit(" ", 1)[-1].lower().rstrip(".")
+            if before in ABBREVIATIONS or (len(before) == 1 and before.isalpha()):
+                continue  # "et al.", "Fig.", an initial: not a sentence end
+            if len(rest[: m.end()].split()) <= MAX_COMPLETION_WORDS:
+                return cased[at : end + m.end()]
+            break
+    return q.rstrip(" ,;:-") + "…"
+
+
+def short_title(title: str) -> str:
+    """A title for a source line: the part before a colon, or the title cut at a word."""
+    t = " ".join(title.split())
+    head = t.split(":", 1)[0].strip()
+    if ":" in t and 0 < len(head) <= SHORT_TITLE_CHARS:
+        return head
+    if len(t) <= SHORT_TITLE_CHARS:
+        return t
+    return t[: SHORT_TITLE_CHARS + 1].rsplit(" ", 1)[0].rstrip(",;:-") + "…"
+
+
+def name_documents(text: str, shorts: dict[int, str]) -> str:
+    """ "Document 2", "Documents 1 and 2"... replaced by the short titles, for display."""
+
+    def replace(m: re.Match) -> str:
+        names = [shorts.get(int(n)) for n in m.groups() if n]
+        return m.group(0) if None in names else " and ".join(names)
+
+    return DOCUMENT_REFERENCE.sub(replace, text)
+
+
+IDEA_FIELDS = ("problem_gap", "core_claim", "method", "inspiration")
+
+
+def display_idea(idea: dict[str, Any], sheets: list[Sheet]) -> dict[str, str]:
+    """The fields of an idea as the page shows them, with each document named by its short title.
+    The idea itself, which later calls read, is left as the model wrote it."""
+    shorts = {s.number: s.short for s in sheets}
+    return {f: name_documents(idea[f], shorts) for f in IDEA_FIELDS if f in idea}
+
+
+def source_item(sheet: Sheet, evidence: Evidence) -> dict[str, Any]:
+    """A cited passage as the page shows it: "<short title> · P6", with the completed passage."""
+    return {
+        "document": sheet.number,
+        "name": sheet.name,
+        "short": sheet.short,
+        "evidence": evidence.id,
+        "label": evidence.label,
+        "quote": evidence.quote,
+        "passage": evidence.public()["passage"],
+        "found": evidence.found,
+    }
 
 
 def read_pdf(data: bytes, shown: str, max_pages: int) -> tuple[int, str]:
+    """Pages and the tidied text, with its case."""
     try:
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted:
@@ -106,7 +211,7 @@ def read_pdf(data: bytes, shown: str, max_pages: int) -> tuple[int, str]:
             raise UploadError(f"{shown}: the PDF has no pages.")
         if pages > max_pages:
             raise UploadError(f"{shown}: {pages} pages; the limit is {max_pages} per document.")
-        return pages, normalize("\n".join(page.extract_text() or "" for page in reader.pages))
+        return pages, tidy("\n".join(page.extract_text() or "" for page in reader.pages))
     except UploadError:
         raise
     except (PdfReadError, ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
@@ -130,8 +235,8 @@ def load_documents(files: list[tuple[str | None, bytes]], limits: dict[str, Any]
         if digest in seen:
             raise UploadError(f"{shown}: the same file was uploaded twice.")
         seen.add(digest)
-        pages, text = read_pdf(data, shown, limits["max_pages_per_document"])
-        documents.append(Document(number, shown, data, pages, text))
+        pages, cased = read_pdf(data, shown, limits["max_pages_per_document"])
+        documents.append(Document(number, shown, data, pages, cased.lower(), cased))
     return documents
 
 
@@ -153,6 +258,12 @@ def parse_sheet(content: str | None, document: Document) -> Sheet | None:
         methods=reply.methods,
         limitations=reply.limitations,
         evidence=tuple(
-            Evidence(f"E{i}", q, normalize(q) in document.text) for i, q in enumerate(quotes, 1)
+            Evidence(
+                f"E{i}",
+                q,
+                normalize(q) in document.text,
+                complete_passage(q, document.cased),
+            )
+            for i, q in enumerate(quotes, 1)
         ),
     )

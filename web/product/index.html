@@ -34,6 +34,10 @@
   h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 12px 0 2px; font-weight: 600; }
   blockquote { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--line); }
   .unchecked { color: var(--warn); }
+  details.sources { margin-top: 12px; }
+  details.sources > summary { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; cursor: pointer; }
+  details.source { margin: 6px 0 0 8px; }
+  details.source > summary { cursor: pointer; }
   a { color: var(--accent); }
   .example { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
   .example button { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
@@ -74,7 +78,8 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-const FIELDS = [["problem_gap", "Gap"], ["core_claim", "Claim"], ["method", "Method"], ["inspiration", "Inspiration"]];
+const FIELDS = [["problem_gap", "Gap"], ["core_claim", "Claim (bet)"], ["method", "Method"], ["inspiration", "Inspiration"]];
+const SOURCES_OPEN = 2;
 let shown = 0;
 let oneCallShown = false;
 let sheetsShown = false;
@@ -110,13 +115,13 @@ async function refreshLimits() {
 
 function renderSheet(sheet) {
   const box = el("details");
-  box.append(el("summary", `${sheet.name}: ${sheet.title}`));
+  box.append(el("summary", sheet.title));
   for (const [label, text] of [["Summary", sheet.summary], ["Methods", sheet.methods], ["Limitations", sheet.limitations]]) {
     box.append(el("h2", label), el("p", text));
   }
   box.append(el("h2", "Evidence"));
   for (const e of sheet.evidence) {
-    box.append(el("blockquote", `${e.id}: ${e.quote}`));
+    box.append(el("blockquote", `${e.label}: ${e.passage}`));
     if (!e.found) box.append(el("p", "Quote not found in the extracted text; check it by hand.", "unchecked"));
   }
   return box;
@@ -134,13 +139,20 @@ function renderIdea(item, number) {
       : "The model's reply for this idea was not valid.", "muted"));
     return box;
   }
-  for (const [key, label] of FIELDS) box.append(el("h2", label), el("p", item.idea[key]));
-  box.append(el("h2", "Sources"));
-  if (!item.sources.length) box.append(el("p", "The model cited no usable source for this idea.", "unchecked"));
-  for (const s of item.sources) {
-    box.append(el("p", `${s.name}, ${s.evidence}`), el("blockquote", s.quote));
-    if (!s.found) box.append(el("p", "Quote not found in the extracted text; check it by hand.", "unchecked"));
-  }
+  const shownText = item.display || item.idea;
+  for (const [key, label] of FIELDS) box.append(el("h2", label), el("p", shownText[key]));
+  const sources = el("details", undefined, "sources");
+  sources.open = true;
+  sources.append(el("summary", `Sources (${item.sources.length})`));
+  if (!item.sources.length) sources.append(el("p", "The model cited no usable source for this idea.", "unchecked"));
+  item.sources.forEach((s, i) => {
+    const one = el("details", undefined, "source");
+    one.open = i < SOURCES_OPEN;
+    one.append(el("summary", `${s.short} · ${s.label}`), el("blockquote", s.passage));
+    if (!s.found) one.append(el("p", "Quote not found in the extracted text; check it by hand.", "unchecked"));
+    sources.append(one);
+  });
+  box.append(sources);
   if (item.rejected) box.append(el("p", `${item.rejected} cited source(s) dropped: they named no passage of a sheet.`, "unchecked"));
   return box;
 }

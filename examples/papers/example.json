@@ -34,48 +34,65 @@
    "document": 1,
    "name": "2307.03109v9.pdf",
    "title": "A Survey on Evaluation of Large Language Models",
+   "short": "A Survey on Evaluation of Large…",
    "summary": "This survey reviews evaluation of large language models along what to evaluate, where to evaluate, and how to evaluate. It covers natural language processing, reasoning, robustness, ethics, bias, trustworthiness, social and natural science, medicine, agents, education and other applications, plus benchmarks and automatic versus human protocols. It finds LLMs excel at fluent generation, understanding, arithmetic and logical reasoning, QA and translation, but fail at semantic understanding, abstract and complex reasoning, non-Latin and low-resource languages, factuality, robustness and bias. It proposes grand challenges including AGI benchmarks, dynamic, principled and unified evaluation.",
    "methods": "Literature survey organizing prior work into three dimensions, categorizing tasks, compiling 46 popular benchmarks into general, specific and multi-modal groups, and summarizing automatic metrics and human evaluation criteria and novel protocols.",
    "limitations": "No single benchmark or protocol is shown most useful; conclusions depend on specific datasets. Results evolve as models improve, new limitations may arise, and the rapidly developing literature means some new papers or benchmarks may be missed.",
    "evidence": [
     {
      "id": "E1",
+     "label": "P1",
      "quote": "focusing on three key dimensions: what to evaluate, where to evaluate, and how to evaluate.",
+     "passage": "focusing on three key dimensions: what to evaluate, where to evaluate, and how to evaluate.",
      "found": true
     },
     {
      "id": "E2",
+     "label": "P2",
      "quote": "As depicted in Figure 1, we explore existing work in three dimensions:",
+     "passage": "As depicted in Figure 1, we explore existing work in three dimensions: 1) What to evaluate, 2) Where to evaluate, and 3) How to evaluate.",
      "found": true
     },
     {
      "id": "E3",
+     "label": "P3",
      "quote": "we compile a selection of 46 popular benchmarks, as shown in Table 7.",
+     "passage": "we compile a selection of 46 popular benchmarks, as shown in Table 7.",
      "found": true
     },
     {
      "id": "E4",
+     "label": "P4",
      "quote": "In summary, the performance of LLMs in semantic understanding tasks is poor.",
+     "passage": "In summary, the performance of LLMs in semantic understanding tasks is poor.",
      "found": true
     },
     {
      "id": "E5",
+     "label": "P5",
      "quote": "contemporary LLMs are vulnerable to adversarial prompts",
+     "passage": "contemporary LLMs are vulnerable to adversarial prompts, highlighting the importance of the models’ robustness when facing adversarial inputs.",
      "found": true
     },
     {
      "id": "E6",
+     "label": "P6",
      "quote": "evaluation should be treated as an essential discipline to better assist the development of LLMs.",
+     "passage": "evaluation should be treated as an essential discipline to better assist the development of LLMs.",
      "found": true
     },
     {
      "id": "E7",
+     "label": "P7",
      "quote": "there is no evidence to explicitly show that one certain evaluation protocol or",
+     "passage": "there is no evidence to explicitly show that one certain evaluation protocol or benchmark is the most useful and successful, but with different characteristics and focuses .",
      "found": true
     },
     {
      "id": "E8",
+     "label": "P8",
      "quote": "Finally, the evaluation of LLMs is continuously developing, thus we may miss some new papers",
+     "passage": "Finally, the evaluation of LLMs is continuously developing, thus we may miss some new papers or benchmarks.",
      "found": true
     }
    ]
@@ -84,48 +101,65 @@
    "document": 2,
    "name": "2305.03726v2.pdf",
    "title": "Otter: A Multi-Modal Model with In-Context Instruction Tuning",
+   "short": "Otter",
    "summary": "The document introduces Otter, a large multimodal assistant built on Flamingo/OpenFlamingo that uses both textual and visual in-context examples for instruction tuning, and the MIMIC-IT dataset with over 3 million multimodal instruction-response pairs and ~2.2 million unique instructions across images and videos. It finds in-context instruction tuning substantially enhances convergence and generalization, enabling Otter to excel at complex video and multi-image understanding and to outperform recent open-sourced LMMs on image and video benchmarks.",
    "methods": "Built on pretrained OpenFlamingo-9B with MPT-7B decoder and CLIP ViT-L/14, training only perceiver resampler and cross-gated attention. Curated MIMIC-IT via ChatGPT self-instruct Syphus pipeline with retrieval and video clips.",
    "limitations": "Concedes Otter still has limitations on fine-grained OCR due to low-resolution 224x224 vision encoder, potential PII and bias in public data, and ChatGPT generation errors requiring cleaning and future work on visual perception.",
    "evidence": [
     {
      "id": "E1",
+     "label": "P1",
      "quote": "we introduce the Otter model to leverage both textual and visual in-context examples for instruction tuning.",
+     "passage": "we introduce the Otter model to leverage both textual and visual in-context examples for instruction tuning.",
      "found": true
     },
     {
      "id": "E2",
+     "label": "P2",
      "quote": "Otter builds upon Flamingo with Perceiver architecture, and has been instruction tuned for general purpose multi-modal assistant.",
+     "passage": "Otter builds upon Flamingo with Perceiver architecture, and has been instruction tuned for general purpose multi-modal assistant.",
      "found": true
     },
     {
      "id": "E3",
+     "label": "P3",
      "quote": "which encompasses over 3 million multi-modal instruction-response pairs, including approximately 2.2 million unique instructions across a broad spectrum of images and videos.",
+     "passage": "which encompasses over 3 million multi-modal instruction-response pairs, including approximately 2.2 million unique instructions across a broad spectrum of images and videos.",
      "found": true
     },
     {
      "id": "E4",
+     "label": "P4",
      "quote": "We built Otter model based on a pretrained OpenFlamingo-9B.",
+     "passage": "We built Otter model based on a pretrained OpenFlamingo-9B.",
      "found": false
     },
     {
      "id": "E5",
+     "label": "P5",
      "quote": "we only train the perceiver resampler and cross-gated attention modules within the pretrained OpenFlamingo-9B,",
+     "passage": "we only train the perceiver resampler and cross-gated attention modules within the pretrained OpenFlamingo-9B, collectively encompassing 1.4B parameters.",
      "found": true
     },
     {
      "id": "E6",
+     "label": "P6",
      "quote": "that instruction tuning with these in-context examples substantially enhances model convergence and generalization capabilities.",
+     "passage": "that instruction tuning with these in-context examples substantially enhances model convergence and generalization capabilities.",
      "found": true
     },
     {
      "id": "E7",
+     "label": "P7",
      "quote": "yet it still has limitations in certain scenarios like fine-grained OCR tasks due to the relatively",
+     "passage": "yet it still has limitations in certain scenarios like fine-grained OCR tasks due to the relatively low-res (224×224) of the pretrained vision encoder.",
      "found": true
     },
     {
      "id": "E8",
+     "label": "P8",
      "quote": "low-res (224×224) of the pretrained vision encoder.",
+     "passage": "low-res (224×224) of the pretrained vision encoder.",
      "found": true
     }
    ]

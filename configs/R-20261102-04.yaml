@@ -10,6 +10,7 @@ page: web/product/index.html
 pdf_dir: data/trial          # not committed: each PDF stays available from arXiv under its license
 host: 127.0.0.1
 port: 8000
+example: examples/papers/example.json   # so the page served from this config offers the example papers
 
 # The two accepted papers of R-20261102-02; licenses read from arXiv's OAI metadata on 2026-11-02,
 # first authors from the arXiv abstract pages on 2026-11-03. The example papers of the app come

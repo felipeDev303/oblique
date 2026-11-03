@@ -5,7 +5,8 @@
 
 "Try with 2 example papers" starts a set without an upload. The sheets of the two CC BY papers and
 the one-call column (K=3, no card) come from this file; only the Oblique sequential set is
-generated live. The PDFs themselves are not packaged: the page links to them on arXiv.
+generated live. The PDFs themselves are not packaged: the page links to them on arXiv. Their
+passages are completed to the end of the sentence from the local PDFs when the file is built.
 
 The file is built from a real trial (`sets.json` of R-20261102-04) and records the prompt hashes it
 was made with. The app refuses a file whose hashes differ from the current prompts, since its
@@ -22,7 +23,14 @@ from typing import Any
 
 import yaml
 
-from oblique.product.documents import Evidence, Sheet
+from oblique.product.documents import (
+    Evidence,
+    Sheet,
+    complete_passage,
+    display_idea,
+    read_pdf,
+    source_item,
+)
 from oblique.prompts.product import DOCUMENT_SHEET_V1, IDEATION_SHEETS_ONE_CALL_V1
 
 
@@ -38,8 +46,23 @@ def sheet_from_public(d: dict[str, Any]) -> Sheet:
         summary=d["summary"],
         methods=d["methods"],
         limitations=d["limitations"],
-        evidence=tuple(Evidence(e["id"], e["quote"], e["found"]) for e in d["evidence"]),
+        evidence=tuple(
+            Evidence(e["id"], e["quote"], e["found"], e.get("passage", "")) for e in d["evidence"]
+        ),
     )
+
+
+def as_shown(item: dict[str, Any], sheets: list[Sheet]) -> dict[str, Any]:
+    """A stored one-call idea with its sources and fields as the page shows them today."""
+    if item["status"] != "ok":
+        return item
+    by_number = {s.number: s for s in sheets}
+    sources = []
+    for s in item["sources"]:
+        sheet = by_number[s["document"]]
+        evidence = next(e for e in sheet.evidence if e.id == s["evidence"])
+        sources.append(source_item(sheet, evidence))
+    return item | {"display": display_idea(item["idea"], sheets), "sources": sources}
 
 
 @dataclass(frozen=True)
@@ -64,16 +87,21 @@ def load_example(path: str | Path) -> Example:
     papers = data["papers"]
     if any(not p["license"].startswith("CC BY") for p in papers):
         raise SystemExit("every example paper must be CC BY")
+    sheets = [sheet_from_public(s) for s in data["sheets"]]
     return Example(
         papers=papers,
-        sheets=[sheet_from_public(s) for s in data["sheets"]],
-        one_call=data["one_call"],
+        sheets=sheets,
+        one_call=[as_shown(item, sheets) for item in data["one_call"]],
         documents=[{"number": p["number"], "name": p["name"], "pages": p["pages"]} for p in papers],
     )
 
 
-def build(page: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
-    """The example file from the page body of a side-by-side trial set and the trial's config."""
+def build(
+    page: dict[str, Any], cfg: dict[str, Any], texts: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """The example file from the page body of a side-by-side trial set and the trial's config.
+    `texts` holds the local text of each PDF by file name, to complete each passage to the end of
+    its sentence; without it, a passage that stops mid-sentence ends in "…"."""
     if page["view"] != "side_by_side" or page["status"] != "done":
         raise SystemExit("the trial set must be a finished side-by-side set")
     by_name = {f"{p['arxiv_id']}{p['version']}.pdf": p for p in cfg["papers"]}
@@ -93,12 +121,20 @@ def build(page: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
                 "url": f"https://arxiv.org/abs/{p['arxiv_id']}{p['version']}",
             }
         )
+    texts = texts or {}
+    sheets = []
+    for d in page["sheets"]:
+        evidence = [
+            e | {"passage": complete_passage(e["quote"], texts.get(d["name"], ""))}
+            for e in d["evidence"]
+        ]
+        sheets.append(sheet_from_public(d | {"evidence": evidence}).public())
     return {
         "source_run": cfg["run_id"],
         "model": cfg["generator"]["model"],
         "prompts": current_prompts(),
         "papers": papers,
-        "sheets": page["sheets"],
+        "sheets": sheets,
         "one_call": page["one_call"],
     }
 
@@ -109,8 +145,12 @@ def main(argv: list[str]) -> None:
     run, config, out = (Path(a) for a in argv)
     page = json.loads((run / "sets.json").read_text("utf-8"))[0]
     cfg = yaml.safe_load(config.read_text("utf-8"))
+    texts = {}
+    for d in page["documents"]:
+        pdf = Path(cfg["pdf_dir"]) / d["name"]
+        texts[d["name"]] = read_pdf(pdf.read_bytes(), d["name"], 10_000)[1]
     out.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(build(page, cfg), indent=1, ensure_ascii=False) + "\n"
+    text = json.dumps(build(page, cfg, texts), indent=1, ensure_ascii=False) + "\n"
     out.write_text(text, "utf-8", newline="\n")
     load_example(out)
     print(out)

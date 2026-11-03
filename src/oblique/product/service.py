@@ -39,7 +39,13 @@ from oblique.deck.controls import DECK_DIR
 from oblique.generate.schema import IdeaCard
 from oblique.generate.validate import parse_set, unfence
 from oblique.llm import Completion, ContentFilteredError, LLMClient
-from oblique.product.documents import Document, Sheet, parse_sheet
+from oblique.product.documents import (
+    Document,
+    Sheet,
+    display_idea,
+    parse_sheet,
+    source_item,
+)
 from oblique.product.examples import Example, load_example
 from oblique.product.spend import SpendLedger, call_cost
 from oblique.prompts.product import (
@@ -104,15 +110,7 @@ def parse_sources(content: str | None, sheets: list[Sheet], index: int = 0) -> d
         if passage is None:
             rejected += 1
             continue
-        sources.append(
-            {
-                "document": number,
-                "name": sheet.name,
-                "evidence": passage.id,
-                "quote": passage.quote,
-                "found": passage.found,
-            }
-        )
+        sources.append(source_item(sheet, passage))
     return {"sources": sources, "rejected": rejected}
 
 
@@ -331,6 +329,7 @@ class ProductService:
                 "card": shown,
                 "status": "ok",
                 "idea": slot.idea.model_dump(),
+                "display": display_idea(slot.idea.model_dump(), sheets),
                 **parse_sources(c.content, sheets),
             },
             slot.idea,
@@ -358,6 +357,7 @@ class ProductService:
                     "card": None,
                     "status": "ok",
                     "idea": slot.idea.model_dump(),
+                    "display": display_idea(slot.idea.model_dump(), sheets),
                     **parse_sources(c.content, sheets, i),
                 }
             )
