@@ -43,3 +43,8 @@ The vault is **read-only**, except for:
 5. **Split B is sealed.** Do not read or use it until the author says so.
 6. **Experimental design decisions are not the assistant's to make.** On any ambiguity, ask; the author records the decision as an ADR.
 7. All model calls go through the local response cache (key = hash of model, messages, params, seed).
+
+## Privacy
+Never include the user's personal data (email, name, keys, tokens) in requests to external
+services, headers (including User-Agent), URLs or payloads. If a service asks for contact info,
+use a generic project identifier or ask first.
