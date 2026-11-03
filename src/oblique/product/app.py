@@ -102,6 +102,25 @@ def create_app(cfg: dict[str, Any], *, transport: Any = None, wait: Any = None) 
         except (LimitReached, Busy) as e:
             raise HTTPException(status_code=429, detail=str(e)) from e
 
+    @app.post("/api/examples", status_code=202)
+    async def create_example_set(
+        request: Request,
+        view: str = Form("sequential"),
+        cards: str = Form("on"),
+    ) -> dict[str, Any]:
+        """A set over the two example papers: no upload, sheets and one call from the file."""
+        if service.example is None:
+            raise HTTPException(status_code=404, detail="No example papers here.")
+        if view not in VIEWS or cards not in ("on", "off"):
+            raise HTTPException(status_code=400, detail="Unknown view or card setting.")
+        session = request.state.session
+        try:
+            service.check_can_start(service.session(session))
+            job = service.start(session, [], view=view, with_cards=cards == "on", example=True)
+            return job.public()
+        except (LimitReached, Busy) as e:
+            raise HTTPException(status_code=429, detail=str(e)) from e
+
     @app.get("/api/sets/{job_id}")
     async def get_set(job_id: str, request: Request) -> dict[str, Any]:
         job = service.jobs.get(job_id)

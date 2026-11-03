@@ -9,6 +9,9 @@ before it, because on split B the sequential set beat the one-call set clearly (
 The cards can be turned off. The side-by-side view adds one call that asks for the K ideas at once
 with no card, as C1 in the experiment, and shows it next to the sequential set.
 
+A set over the example papers takes their sheets and their one-call column from a file computed in
+advance (`oblique.product.examples`), so only the sequential set is paid.
+
 No judges and no metrics: the same generation core as the experiment, on the user's documents.
 Sets are generated with the Standard model, never Contributor, which would let Meta use the
 user's PDFs for training.
@@ -37,6 +40,7 @@ from oblique.generate.schema import IdeaCard
 from oblique.generate.validate import parse_set, unfence
 from oblique.llm import Completion, ContentFilteredError, LLMClient
 from oblique.product.documents import Document, Sheet, parse_sheet
+from oblique.product.examples import Example, load_example
 from oblique.product.spend import SpendLedger, call_cost
 from oblique.prompts.product import (
     DOCUMENT_SHEET_V1,
@@ -130,6 +134,7 @@ class Job:
     sheets: list[dict[str, Any]] = field(default_factory=list)
     ideas: list[dict[str, Any]] = field(default_factory=list)  # the sequential set
     one_call: list[dict[str, Any]] = field(default_factory=list)  # side by side only
+    example: bool = False  # over the example papers: sheets and one call computed in advance
     message: str | None = None
     task: asyncio.Task | None = None
 
@@ -142,6 +147,7 @@ class Job:
             "documents": self.documents,
             "k": len(self.cards),
             "view": self.view,
+            "example": self.example,
             "with_cards": any(c is not None for c in self.cards),
             "sheets": self.sheets,
             "ideas": self.ideas,
@@ -174,6 +180,7 @@ class ProductService:
         self.sessions: dict[str, Session] = {}
         self.jobs: dict[str, Job] = {}
         self.ledger = SpendLedger(cfg["ledger"])
+        self.example: Example | None = load_example(cfg["example"]) if cfg.get("example") else None
 
     @property
     def spent_usd(self) -> float:
@@ -211,6 +218,7 @@ class ProductService:
             "deck": self.cfg["deck"].get("name"),
             "deck_experimental": bool(self.cfg["deck"].get("experimental", False)),
             "deck_note": self.cfg["deck"]["note"],
+            "example": self.example.public() if self.example else None,
         }
 
     # --- a set ----------------------------------------------------------------
@@ -222,10 +230,14 @@ class ProductService:
         *,
         view: str = "sequential",
         with_cards: bool = True,
+        example: bool = False,
     ) -> Job:
-        """Everything before the first await, so concurrent requests cannot pass a limit."""
+        """Everything before the first await, so concurrent requests cannot pass a limit. With
+        `example`, `documents` is ignored and the set runs over the example papers."""
         if view not in VIEWS:
             raise ValueError(f"unknown view {view!r}")
+        if example and self.example is None:
+            raise ValueError("no example papers are configured")
         session = self.session(session_id)
         self.check_can_start(session)
         session.sets_started += 1
@@ -233,8 +245,11 @@ class ProductService:
             id=secrets.token_urlsafe(16),
             session=session_id,
             cards=random.SystemRandom().sample(self.deck, K) if with_cards else [None] * K,
-            documents=[{"number": d.number, "name": d.name, "pages": d.pages} for d in documents],
+            documents=self.example.documents
+            if example
+            else [{"number": d.number, "name": d.name, "pages": d.pages} for d in documents],
             view=view,
+            example=example,
         )
         self.jobs[job.id] = job
         for old in [j for j in self.jobs.values() if j.status != "running"][:-MAX_JOBS_KEPT]:
@@ -351,11 +366,17 @@ class ProductService:
     async def run(self, job: Job, session: Session, documents: list[Document]) -> None:
         previous: list[IdeaCard] = []
         try:
-            sheets = await self.read_all(session, documents)
+            if job.example:
+                sheets = self.example.sheets
+            else:
+                sheets = await self.read_all(session, documents)
             job.sheets = [s.public() for s in sheets]
             if job.view == "side_by_side":
                 job.phase = "one_call"
-                job.one_call = await self.one_call(session, sheets)
+                if job.example:
+                    job.one_call = [dict(item) for item in self.example.one_call]
+                else:
+                    job.one_call = await self.one_call(session, sheets)
             job.phase = "ideas"
             for card in job.cards:
                 shown, idea = await self.one_idea(session, sheets, previous, card)

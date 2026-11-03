@@ -30,6 +30,7 @@ def test_the_space_folder_holds_the_app_and_no_secret_or_data(tmp_path):
         "src/oblique/product/app.py",
         "deck/cards/E6-1.yaml",
         "web/product/index.html",
+        "examples/papers/example.json",
     ):
         assert needed in copied
     assert not any(p.endswith((".env", ".db", ".jsonl")) for p in copied)
@@ -43,13 +44,14 @@ def test_the_space_folder_holds_the_app_and_no_secret_or_data(tmp_path):
 def test_the_space_config_caps_spend_and_keeps_the_ledger_on_storage():
     space = yaml.safe_load(Path("configs/space.yaml").read_text("utf-8"))
     product = yaml.safe_load(Path("configs/product.yaml").read_text("utf-8"))
-    assert space["limits"]["budget_usd"] <= 10
+    assert space["limits"]["budget_usd"] == 19.50  # global cap US$20
     assert space["ledger"].startswith(space["persistent_dir"] + "/")
     assert space["cache"].startswith(space["persistent_dir"] + "/")
     assert space["generator"]["model"] == "muse-spark-1.3"
     assert space["cookie_cross_site"] is True and space["port"] == 7860
     assert space["deck"] == product["deck"]
     assert space["generator"] == product["generator"]
+    assert space["example"] == product["example"]
 
 
 def test_the_app_refuses_to_start_without_persistent_storage(tmp_path):

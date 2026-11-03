@@ -2,8 +2,9 @@
 
     uv run python deploy/space/build.py dist/space
 
-The folder holds the package, the deck, the product page, the results page, the Space config, the
-lock file and the Dockerfile. No `.env`, no data, no runs and no cache: the key is a Space secret.
+The folder holds the package, the deck, the product page, the results page, the example papers'
+sheets and one-call set, the Space config, the lock file and the Dockerfile. No `.env`, no data,
+no runs and no cache: the key is a Space secret.
 """
 
 from __future__ import annotations
@@ -14,7 +15,13 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 FILES = ["pyproject.toml", "uv.lock", "LICENSE", "configs/space.yaml", "deck/LICENSE"]
-TREES = {"src/oblique": "*.py", "deck/cards": "*.yaml", "web/product": "*", "web/results": "*"}
+TREES = {
+    "src/oblique": "*.py",
+    "deck/cards": "*.yaml",
+    "web/product": "*",
+    "web/results": "*",
+    "examples/papers": "*.json",
+}
 NEVER = (".env", ".db", ".jsonl")
 
 

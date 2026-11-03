@@ -4,6 +4,10 @@ cache: /data/oblique/product.db
 ledger: /data/oblique/ledger.jsonl
 persistent_dir: /data        # the app refuses to start without it: the budget must survive restarts
 page: web/product/index.html
+
+# "Try with 2 example papers": two CC BY papers whose sheets and one-call set were computed in
+# advance (R-20261102-04); only the sequential set is generated live.
+example: examples/papers/example.json
 results_dir: web/results
 host: 0.0.0.0                # inside the container; the Space puts it behind HTTPS
 port: 7860
@@ -27,7 +31,7 @@ limits:
   max_pages_per_document: 50
   sets_per_session: 3
   session_usd: 1.00          # a session is a cookie: clearing it starts a new one
-  budget_usd: 9.70           # global cap US$10: no new call past 9.70, so calls in flight fit under it
+  budget_usd: 19.50          # global cap US$20: no new call past 19.50, so calls in flight fit under it
   max_running_sets: 2
 
 # The same deck as configs/product.yaml (ADR-011).

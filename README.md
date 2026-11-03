@@ -4,6 +4,9 @@
 
 > **Status:** work in progress (built during the Meta Global AI Developer Hackathon, Oct 26 – Nov 4 2026).
 
+- **Try it:** <!-- TODO: Space URL --> `SPACE_URL` ("bring your papers" on Hugging Face Spaces; no PDFs needed with "Try with 2 example papers")
+- **Results page:** <!-- TODO: Space URL + /results/ --> `SPACE_URL/results/`
+
 ## Research question
 
 Can a deck of inference-time perturbations recover an LLM's idea diversity without paying for it in quality, and without training anything?
@@ -92,14 +95,14 @@ uv run python -m oblique.export.results runs/R-20261103-01 runs/R-20261031-01
 
 ## Hugging Face Space
 
-Only the "bring your papers" app goes to the Space, with `configs/space.yaml`: Muse Spark Standard, the E6 deck, the same per-session limits, and a global cap of US$10 (no new call past US$9.70). The ledger lives on the Space's persistent storage at `/data`. Without that storage the app refuses to start, because the cap would restart from zero on every restart.
+Only the "bring your papers" app goes to the Space, with `configs/space.yaml`: Muse Spark Standard, the E6 deck, the same per-session limits, and a global cap of US$20 (no new call past US$19.50). The ledger lives on the Space's persistent storage at `/data`. Without that storage the app refuses to start, because the cap would restart from zero on every restart.
 
 ```bash
 uv run python deploy/space/build.py dist/space        # only the app: no .env, data or runs
 hf upload <user>/<space> dist/space . --repo-type space
 ```
 
-The API key is a Space secret, `MODEL_API_KEY`, never a file. The page sets its session cookie as `SameSite=None; Secure; Partitioned`, so the session also holds inside the Space's iframe.
+The image also carries `examples/papers/example.json`: the sheets and one-call set of the two example papers, not the PDFs and not the response cache. The API key is a Space secret, `MODEL_API_KEY`, never a file. The page sets its session cookie as `SameSite=None; Secure; Partitioned`, so the session also holds inside the Space's iframe.
 
 ## Built during the hackathon
 
@@ -160,7 +163,8 @@ The API key is a Space secret, `MODEL_API_KEY`, never a file. The page sets its 
 
 - Real trial of the side-by-side view (R-20261102-04, two CC BY papers from arXiv): one call (K=3) against Oblique sequential with E6 cost US$0.23 in 121 s, sheets included (US$0.17 of it). Results in [`runs/R-20261102-04/summary.md`](runs/R-20261102-04/summary.md).
 - Results page (`web/results/`, served at `/results/` and linked from the app), from stored metrics only.
-- Deployment to a Hugging Face Space (`deploy/space/`): a Docker image with only the app, the ledger on persistent storage, and a global cap of US$10.
+- Deployment to a Hugging Face Space (`deploy/space/`): a Docker image with only the app, the ledger on persistent storage, and a global cap of US$20.
+- "Try with 2 example papers": a set over two CC BY papers from arXiv (2307.03109v9 and 2305.03726v2) with no upload. Their sheets and the one-call column come from the trial R-20261102-04 and ship in `examples/papers/example.json`; only the sequential set is generated live, and the page names both papers and their license. The app refuses the file if it was built with other prompts.
 
 ## License
 
