@@ -47,6 +47,28 @@ All numbers are paired differences over benchmark instances with 95% bootstrap C
 - The content filter removed 13 judgments of one instance, and one generation failed with a persistent provider error (ADR-006, amendments 6 and 7), so most comparisons have n = 49.
 - C1s − C1, MG − C1s and the product deck come from analyses written after split B was read (ADR-011). They use only the stored records, and the script first checks that it reproduces the run's `metrics.json` exactly (every set and the controlled q of E6 − C1s); it stops if not.
 
+## How to reproduce
+
+```bash
+uv sync --group dev --group embed --group product
+cp .env.example .env                  # add MODEL_API_KEY (Meta Model API)
+uv run python -m oblique.bench fetch  # GiantsBench-test, pinned revision, checked by SHA256
+uv run pytest                         # no test calls the API
+```
+
+Every run is launched from its config in `configs/`, and each one has a `--plan` gate or a cost in its summary. The paid responses live in a local cache that is not committed, so re-running a config makes real calls; costs are in each `runs/R-*/summary.md`.
+
+| Step | Command | Cost of the original run |
+|---|---|---|
+| Map of the deck on split A | `uv run --group embed python -m oblique.map_sweep configs/R-20261031-01.yaml` | US$3.15 |
+| Evolution G1, proposal and measurement | `python -m oblique.evolve.g1 configs/R-20261101-01.yaml`, then `python -m oblique.evolve.measure configs/R-20261102-01.yaml` | US$0.23 + US$0.97 |
+| Confirmation on split B (once) | `OBLIQUE_UNSEAL_B=1 uv run --group embed python -m oblique.confirm configs/R-20261103-01.yaml` | US$3.34 |
+| Analyses after split B, no calls | `uv run --group embed python -m oblique.post_b configs/R-20261103-01.yaml` | US$0 |
+| Results page data, no calls | `uv run python -m oblique.export.results runs/R-20261103-01 runs/R-20261031-01` | US$0 |
+| The app | `uv run --group product python -m oblique.product.app configs/product.yaml` | per set, about US$0.23 with two new PDFs |
+
+Split B stays sealed unless `OBLIQUE_UNSEAL_B=1` is set; the confirmation runner refuses to run a second time once its metrics exist. The card draws and the Wonder positions for split B are committed in `configs/R-20261103-01.*.json`.
+
 ## Repository layout
 
 ```text
@@ -165,6 +187,12 @@ The image also carries `examples/papers/example.json`: the sheets and one-call s
 - Results page (`web/results/`, served at `/results/` and linked from the app), from stored metrics only.
 - Deployment to a Hugging Face Space (`deploy/space/`): a Docker image with only the app, the ledger on persistent storage, and a global cap of US$20.
 - "Try with 2 example papers": a set over two CC BY papers from arXiv (2307.03109v9 and 2305.03726v2) with no upload. Their sheets and the one-call column come from the trial R-20261102-04 and ship in `examples/papers/example.json`; only the sequential set is generated live, and the page names both papers and their license. The app refuses the file if it was built with other prompts.
+
+### Nov 4 (Day 10)
+
+- Page adjustments before recording: passages shown as P1, P2... and each source as "<short title> · P6", documents named by short title, passages completed to the end of their sentence, folding sources, and "Claim (bet)". Display only: the prompts and the cached responses are unchanged.
+- A privacy rule in `CLAUDE.md`: no personal data in requests to external services; arXiv downloads identify the project only.
+- "How to reproduce" section, and the tag `v1.0`.
 
 ## License
 
