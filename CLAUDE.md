@@ -2,9 +2,9 @@
 
 ## Project
 
-Oblique is a deck of "oblique" perturbation cards applied at inference time. Each idea in a K=3 set is generated under a different card, with the goal of making an LLM (Muse Spark) propose more diverse scientific ideas without losing quality. Nothing is trained. Sets are scored with Creative Utility (greedy, γ = 0.9) against gold ideas, with paired bootstrap CIs over instances. A single core serves two uses: the experiment (with judges) and an OpenAI-compatible proxy (no judges, explicit `+oblique` opt-in).
+Oblique is a deck of "oblique" perturbation cards applied at inference time. Each idea in a K=3 set is generated under a different card, with the goal of making an LLM (Muse Spark) propose more diverse scientific ideas without losing quality. Nothing is trained. Sets are scored with Creative Utility (greedy, γ = 0.9), with paired bootstrap CIs over instances. Quality is judged against an anchor idea from the same model (ADR-008), with the gold idea as a secondary reference. A single core serves two uses: the experiment (with judges) and an OpenAI-compatible proxy (no judges, explicit `+oblique` opt-in).
 
-Models: Muse Spark and Muse Wonder via Meta Model API (`https://api.meta.ai/v1`); Muse Spark Open via Baseten (`meta-models/muse-spark-open-1026`).
+Models: Muse Spark and Muse Wonder via Meta Model API (`https://api.meta.ai/v1`). Muse Spark Open via Baseten was planned but not used.
 
 Built solo for the Meta Global AI Developer Hackathon (Oct 26 – Nov 4 2026, Indie track, theme "Push the Frontier").
 
