@@ -4,6 +4,7 @@
 
 > **Status:** work in progress (built during the Meta Global AI Developer Hackathon, Oct 26 – Nov 4 2026).
 
+- **Video (3 min):** https://youtu.be/pnSDVYOw7PA
 - **Try it:** <!-- TODO: Space URL --> `SPACE_URL` ("bring your papers" on Hugging Face Spaces; no PDFs needed with "Try with 2 example papers")
 - **Results page:** <!-- TODO: Space URL + /results/ --> `SPACE_URL/results/`
 
